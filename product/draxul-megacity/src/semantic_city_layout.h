@@ -154,6 +154,19 @@ struct SemanticCityModuleLayout
     }
 };
 
+// A populated repository folder which contains one or more module layouts below
+// it. Folder layouts carry no buildings of their own; they describe the nested
+// district boundary produced while recursively composing child spirals.
+struct SemanticCityFolderLayout
+{
+    std::string folder_path;
+    int depth = 0;
+    float min_x = 0.0f;
+    float max_x = 0.0f;
+    float min_z = 0.0f;
+    float max_z = 0.0f;
+};
+
 struct RoadSegmentPlacement
 {
     glm::vec2 center{ 0.0f };
@@ -202,6 +215,7 @@ struct SemanticCityLayout
 struct SemanticMegacityLayout
 {
     std::vector<SemanticCityModuleLayout> modules;
+    std::vector<SemanticCityFolderLayout> folders;
     float min_x = 0.0f;
     float max_x = 0.0f;
     float min_z = 0.0f;

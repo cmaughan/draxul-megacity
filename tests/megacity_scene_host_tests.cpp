@@ -490,7 +490,7 @@ TEST_CASE("megacity host publishes a code semantic snapshot without database sta
     CHECK(host.semantic_source_->available_modules() == std::vector<std::string>{ "src" });
     REQUIRE(host.semantic_model_ != nullptr);
     REQUIRE(host.semantic_model_->modules.size() == 1);
-    CHECK(host.semantic_model_->modules[0].module_path == "src");
+    CHECK(host.semantic_model_->modules[0].module_path == ".");
 
     host.shutdown();
 }
@@ -551,7 +551,7 @@ TEST_CASE("megacity host treats stale graphify config as Tree-sitter source", "[
     CHECK(host.semantic_source_->available_modules() == std::vector<std::string>{ "src" });
     REQUIRE(host.semantic_model_ != nullptr);
     REQUIRE(host.semantic_model_->modules.size() == 1);
-    CHECK(host.semantic_model_->modules[0].module_path == "src");
+    CHECK(host.semantic_model_->modules[0].module_path == ".");
 
     host.shutdown();
 }

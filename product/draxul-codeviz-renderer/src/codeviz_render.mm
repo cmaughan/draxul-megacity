@@ -985,23 +985,29 @@ struct CodeVizScenePass::State
         return true;
     }
 
-    bool ensure_gbuffer_targets(id<MTLDevice> device, uint32_t frame_count, int width, int height)
+    bool ensure_gbuffer_targets(
+        id<MTLDevice> device, uint32_t frame_count, uint32_t frame_index, int width, int height)
     {
         PERF_MEASURE();
         if (width <= 0 || height <= 0)
             return false;
 
         frame_count = std::max(1u, frame_count);
-        if (gbuffer_targets.size() == frame_count
-            && !gbuffer_targets.empty()
-            && gbuffer_targets[0].width == width
-            && gbuffer_targets[0].height == height)
+        if (gbuffer_targets.size() != frame_count)
+        {
+            gbuffer_targets.clear();
+            gbuffer_targets.resize(frame_count);
+        }
+        if (frame_index >= gbuffer_targets.size())
+            return false;
+
+        auto& targets = gbuffer_targets[frame_index];
+        if (targets.width == width && targets.height == height && targets.normal)
             return true;
 
-        gbuffer_targets.clear();
-        gbuffer_targets.resize(frame_count);
-
-        for (auto& targets : gbuffer_targets)
+        // The host has completed this frame slot before handing it back to the
+        // plugin, so only this slot's textures need replacing during a resize.
+        targets = {};
         {
             MTLTextureDescriptor* shadow_desc = [MTLTextureDescriptor
                 texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
@@ -1123,7 +1129,7 @@ struct CodeVizScenePass::State
                 || !targets.scene_hdr || !targets.scene_final_srgb || !targets.scene_final_unorm)
             {
                 DRAXUL_LOG_ERROR(LogCategory::App, "MegaCity: failed to create GBuffer/scene textures");
-                gbuffer_targets.clear();
+                targets = {};
                 return false;
             }
         }
@@ -1162,7 +1168,8 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
         return;
     if (!state_->ensure_frame_resources(cmd_buf.device, frame_count))
         return;
-    if (!state_->ensure_gbuffer_targets(cmd_buf.device, frame_count, vw, vh))
+    const uint32_t frame_index = ctx.frame_index() % frame_count;
+    if (!state_->ensure_gbuffer_targets(cmd_buf.device, frame_count, frame_index, vw, vh))
         return;
     if (!state_->ensure_codeviz_material_library(cmd_buf))
         return;
@@ -1171,7 +1178,6 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
     if (!state_->ensure_floor_grid(cmd_buf.device, scene_.floor_grid))
         return;
 
-    const uint32_t frame_index = ctx.frame_index() % static_cast<uint32_t>(state_->frame_resources.size());
     state_->last_prepass_frame = frame_index;
     auto& frame_resources = state_->frame_resources[frame_index];
     frame_resources.geometry_arena.reset();
@@ -1821,9 +1827,10 @@ void CodeVizScenePass::record(IRenderContext& ctx)
     const uint32_t frame_count = std::max(1u, ctx.buffered_frame_count());
     if (!state_->init(cmd_buf.device, grid_width_, grid_height_, tile_size_))
         return;
-    if (!state_->ensure_gbuffer_targets(cmd_buf.device, frame_count, ctx.viewport_w(), ctx.viewport_h()))
+    const uint32_t frame_index = ctx.frame_index() % frame_count;
+    if (!state_->ensure_gbuffer_targets(
+            cmd_buf.device, frame_count, frame_index, ctx.viewport_w(), ctx.viewport_h()))
         return;
-    const uint32_t frame_index = ctx.frame_index() % static_cast<uint32_t>(state_->gbuffer_targets.size());
     auto& gbuffer = state_->gbuffer_targets[frame_index];
     if (!gbuffer.scene_final_unorm)
         return;

@@ -168,6 +168,12 @@ struct GBufferTargets
     int height = 0;
 };
 
+struct RetiredGBufferTargets
+{
+    GBufferTargets targets;
+    uint32_t reclaim_frame_index = 0;
+};
+
 bool same_grid_spec(const FloorGridSpec& a, const FloorGridSpec& b)
 {
     return a.enabled == b.enabled
@@ -276,6 +282,7 @@ struct CodeVizScenePass::State
     std::vector<RetiredBufferResource> retired_buffers;
     std::vector<RetiredMeshResource> retired_meshes;
     std::vector<RetiredImageResource> retired_images;
+    std::vector<RetiredGBufferTargets> retired_gbuffer_targets;
     uint32_t buffered_frame_count = 1;
 
     // GBuffer pre-pass resources
@@ -412,6 +419,16 @@ struct CodeVizScenePass::State
                                      return true;
                                  }),
             retired_images.end());
+
+        retired_gbuffer_targets.erase(
+            std::remove_if(retired_gbuffer_targets.begin(), retired_gbuffer_targets.end(),
+                [&](RetiredGBufferTargets& retired) {
+                    if (retired.reclaim_frame_index != current_frame_index)
+                        return false;
+                    destroy_gbuffer_target(retired.targets);
+                    return true;
+                }),
+            retired_gbuffer_targets.end());
     }
 
     bool ensure_retired_mapped_buffer_capacity(
@@ -1018,7 +1035,9 @@ struct CodeVizScenePass::State
         return true;
     }
 
-    void refresh_gbuffer_descriptors()
+    void refresh_gbuffer_descriptors(
+        size_t first_frame = 0,
+        size_t frame_count = std::numeric_limits<size_t>::max())
     {
         if (gbuffer_sampler == VK_NULL_HANDLE || gbuffer_targets.empty())
             return;
@@ -1029,7 +1048,10 @@ struct CodeVizScenePass::State
                     && texture.sampler != VK_NULL_HANDLE;
             });
 
-        for (size_t i = 0; i < frame_resources.size() && i < gbuffer_targets.size(); ++i)
+        const size_t end_frame = std::min(
+            std::min(frame_resources.size(), gbuffer_targets.size()),
+            first_frame + std::min(frame_count, std::numeric_limits<size_t>::max() - first_frame));
+        for (size_t i = first_frame; i < end_frame; ++i)
         {
             const auto& gbuffer = gbuffer_targets[i];
             auto& frame = frame_resources[i];
@@ -1128,12 +1150,17 @@ struct CodeVizScenePass::State
         }
     }
 
-    void refresh_prepass_descriptors()
+    void refresh_prepass_descriptors(
+        size_t first_frame = 0,
+        size_t frame_count = std::numeric_limits<size_t>::max())
     {
         if (gbuffer_point_sampler == VK_NULL_HANDLE || gbuffer_targets.empty())
             return;
 
-        for (size_t i = 0; i < frame_resources.size() && i < gbuffer_targets.size(); ++i)
+        const size_t end_frame = std::min(
+            std::min(frame_resources.size(), gbuffer_targets.size()),
+            first_frame + std::min(frame_count, std::numeric_limits<size_t>::max() - first_frame));
+        for (size_t i = first_frame; i < end_frame; ++i)
         {
             const auto& gbuffer = gbuffer_targets[i];
             auto& frame = frame_resources[i];
@@ -1191,12 +1218,17 @@ struct CodeVizScenePass::State
         }
     }
 
-    void refresh_post_descriptors()
+    void refresh_post_descriptors(
+        size_t first_frame = 0,
+        size_t frame_count = std::numeric_limits<size_t>::max())
     {
         if (gbuffer_sampler == VK_NULL_HANDLE || gbuffer_targets.empty())
             return;
 
-        for (size_t i = 0; i < frame_resources.size() && i < gbuffer_targets.size(); ++i)
+        const size_t end_frame = std::min(
+            std::min(frame_resources.size(), gbuffer_targets.size()),
+            first_frame + std::min(frame_count, std::numeric_limits<size_t>::max() - first_frame));
+        for (size_t i = first_frame; i < end_frame; ++i)
         {
             const auto& gbuffer = gbuffer_targets[i];
             auto& frame = frame_resources[i];
@@ -2094,143 +2126,171 @@ struct CodeVizScenePass::State
         return create_present_resources();
     }
 
-    void destroy_gbuffer_targets()
+    void destroy_gbuffer_target(GBufferTargets& t)
     {
         PERF_MEASURE();
         const bool can_remove_imgui_textures = ImGui::GetCurrentContext() != nullptr
             && ImGui::GetIO().BackendRendererUserData != nullptr;
+        if (t.imgui_normal_ds != VK_NULL_HANDLE)
+        {
+            if (can_remove_imgui_textures)
+                ImGui_ImplVulkan_RemoveTexture(t.imgui_normal_ds);
+            t.imgui_normal_ds = VK_NULL_HANDLE;
+        }
+        if (t.imgui_ao_raw_ds != VK_NULL_HANDLE)
+        {
+            if (can_remove_imgui_textures)
+                ImGui_ImplVulkan_RemoveTexture(t.imgui_ao_raw_ds);
+            t.imgui_ao_raw_ds = VK_NULL_HANDLE;
+        }
+        if (t.imgui_ao_ds != VK_NULL_HANDLE)
+        {
+            if (can_remove_imgui_textures)
+                ImGui_ImplVulkan_RemoveTexture(t.imgui_ao_ds);
+            t.imgui_ao_ds = VK_NULL_HANDLE;
+        }
+        if (t.imgui_depth_ds != VK_NULL_HANDLE)
+        {
+            if (can_remove_imgui_textures)
+                ImGui_ImplVulkan_RemoveTexture(t.imgui_depth_ds);
+            t.imgui_depth_ds = VK_NULL_HANDLE;
+        }
+        for (VkDescriptorSet& shadow_ds : t.imgui_shadow_ds)
+        {
+            if (shadow_ds != VK_NULL_HANDLE)
+            {
+                if (can_remove_imgui_textures)
+                    ImGui_ImplVulkan_RemoveTexture(shadow_ds);
+                shadow_ds = VK_NULL_HANDLE;
+            }
+        }
+        for (VkDescriptorSet& point_shadow_ds : t.imgui_point_shadow_ds)
+        {
+            if (point_shadow_ds != VK_NULL_HANDLE)
+            {
+                if (can_remove_imgui_textures)
+                    ImGui_ImplVulkan_RemoveTexture(point_shadow_ds);
+                point_shadow_ds = VK_NULL_HANDLE;
+            }
+        }
+        if (t.imgui_scene_hdr_ds != VK_NULL_HANDLE)
+        {
+            if (can_remove_imgui_textures)
+                ImGui_ImplVulkan_RemoveTexture(t.imgui_scene_hdr_ds);
+            t.imgui_scene_hdr_ds = VK_NULL_HANDLE;
+        }
+        if (t.imgui_scene_final_ds != VK_NULL_HANDLE)
+        {
+            if (can_remove_imgui_textures)
+                ImGui_ImplVulkan_RemoveTexture(t.imgui_scene_final_ds);
+            t.imgui_scene_final_ds = VK_NULL_HANDLE;
+        }
+        if (t.framebuffer != VK_NULL_HANDLE)
+            vkDestroyFramebuffer(device, t.framebuffer, nullptr);
+        if (t.ao_raw_framebuffer != VK_NULL_HANDLE)
+            vkDestroyFramebuffer(device, t.ao_raw_framebuffer, nullptr);
+        if (t.ao_framebuffer != VK_NULL_HANDLE)
+            vkDestroyFramebuffer(device, t.ao_framebuffer, nullptr);
+        for (VkFramebuffer shadow_fb : t.shadow_framebuffers)
+        {
+            if (shadow_fb != VK_NULL_HANDLE)
+                vkDestroyFramebuffer(device, shadow_fb, nullptr);
+        }
+        for (VkFramebuffer point_shadow_fb : t.point_shadow_framebuffers)
+        {
+            if (point_shadow_fb != VK_NULL_HANDLE)
+                vkDestroyFramebuffer(device, point_shadow_fb, nullptr);
+        }
+        if (t.scene_framebuffer != VK_NULL_HANDLE)
+            vkDestroyFramebuffer(device, t.scene_framebuffer, nullptr);
+        if (t.scene_post_framebuffer != VK_NULL_HANDLE)
+            vkDestroyFramebuffer(device, t.scene_post_framebuffer, nullptr);
+        if (t.normal_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.normal_view, nullptr);
+        if (t.normal_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.normal_image, t.normal_alloc);
+        if (t.ao_raw_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.ao_raw_view, nullptr);
+        if (t.ao_raw_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.ao_raw_image, t.ao_raw_alloc);
+        if (t.ao_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.ao_view, nullptr);
+        if (t.ao_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.ao_image, t.ao_alloc);
+        if (t.depth_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.depth_view, nullptr);
+        if (t.depth_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.depth_image, t.depth_alloc);
+        for (size_t cascade_index = 0; cascade_index < kShadowCascadeCount; ++cascade_index)
+        {
+            if (t.shadow_views[cascade_index] != VK_NULL_HANDLE)
+                vkDestroyImageView(device, t.shadow_views[cascade_index], nullptr);
+            if (t.shadow_images[cascade_index] != VK_NULL_HANDLE)
+                vmaDestroyImage(allocator, t.shadow_images[cascade_index], t.shadow_allocs[cascade_index]);
+        }
+        for (VkImageView point_shadow_face_view : t.point_shadow_face_views)
+        {
+            if (point_shadow_face_view != VK_NULL_HANDLE)
+                vkDestroyImageView(device, point_shadow_face_view, nullptr);
+        }
+        if (t.point_shadow_cube_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.point_shadow_cube_view, nullptr);
+        if (t.point_shadow_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.point_shadow_image, t.point_shadow_alloc);
+        if (t.point_shadow_depth_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.point_shadow_depth_view, nullptr);
+        if (t.point_shadow_depth_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.point_shadow_depth_image, t.point_shadow_depth_alloc);
+        if (t.scene_color_msaa_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.scene_color_msaa_view, nullptr);
+        if (t.scene_color_msaa_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.scene_color_msaa_image, t.scene_color_msaa_alloc);
+        if (t.scene_depth_msaa_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.scene_depth_msaa_view, nullptr);
+        if (t.scene_depth_msaa_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.scene_depth_msaa_image, t.scene_depth_msaa_alloc);
+        if (t.scene_hdr_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.scene_hdr_view, nullptr);
+        if (t.scene_hdr_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.scene_hdr_image, t.scene_hdr_alloc);
+        if (t.scene_final_srgb_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.scene_final_srgb_view, nullptr);
+        if (t.scene_final_unorm_view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, t.scene_final_unorm_view, nullptr);
+        if (t.scene_final_image != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, t.scene_final_image, t.scene_final_alloc);
+        t = {};
+    }
+
+    void retire_gbuffer_target(GBufferTargets& target, uint32_t current_frame_index)
+    {
+        if (target.framebuffer == VK_NULL_HANDLE)
+        {
+            destroy_gbuffer_target(target);
+            return;
+        }
+
+        // The previous G-buffer can still be referenced by ImGui draw data
+        // recorded into this frame's command buffer. Retain it until Draxul
+        // next acquires this same frame slot, after its fence has completed.
+        RetiredGBufferTargets retired;
+        retired.targets = target;
+        retired.reclaim_frame_index = current_frame_index;
+        target = {};
+        retired_gbuffer_targets.push_back(std::move(retired));
+    }
+
+    void destroy_gbuffer_targets()
+    {
+        PERF_MEASURE();
         for (auto& t : gbuffer_targets)
         {
-            if (t.imgui_normal_ds != VK_NULL_HANDLE)
-            {
-                if (can_remove_imgui_textures)
-                    ImGui_ImplVulkan_RemoveTexture(t.imgui_normal_ds);
-                t.imgui_normal_ds = VK_NULL_HANDLE;
-            }
-            if (t.imgui_ao_raw_ds != VK_NULL_HANDLE)
-            {
-                if (can_remove_imgui_textures)
-                    ImGui_ImplVulkan_RemoveTexture(t.imgui_ao_raw_ds);
-                t.imgui_ao_raw_ds = VK_NULL_HANDLE;
-            }
-            if (t.imgui_ao_ds != VK_NULL_HANDLE)
-            {
-                if (can_remove_imgui_textures)
-                    ImGui_ImplVulkan_RemoveTexture(t.imgui_ao_ds);
-                t.imgui_ao_ds = VK_NULL_HANDLE;
-            }
-            if (t.imgui_depth_ds != VK_NULL_HANDLE)
-            {
-                if (can_remove_imgui_textures)
-                    ImGui_ImplVulkan_RemoveTexture(t.imgui_depth_ds);
-                t.imgui_depth_ds = VK_NULL_HANDLE;
-            }
-            for (VkDescriptorSet& shadow_ds : t.imgui_shadow_ds)
-            {
-                if (shadow_ds != VK_NULL_HANDLE)
-                {
-                    if (can_remove_imgui_textures)
-                        ImGui_ImplVulkan_RemoveTexture(shadow_ds);
-                    shadow_ds = VK_NULL_HANDLE;
-                }
-            }
-            for (VkDescriptorSet& point_shadow_ds : t.imgui_point_shadow_ds)
-            {
-                if (point_shadow_ds != VK_NULL_HANDLE)
-                {
-                    if (can_remove_imgui_textures)
-                        ImGui_ImplVulkan_RemoveTexture(point_shadow_ds);
-                    point_shadow_ds = VK_NULL_HANDLE;
-                }
-            }
-            if (t.imgui_scene_hdr_ds != VK_NULL_HANDLE)
-            {
-                if (can_remove_imgui_textures)
-                    ImGui_ImplVulkan_RemoveTexture(t.imgui_scene_hdr_ds);
-                t.imgui_scene_hdr_ds = VK_NULL_HANDLE;
-            }
-            if (t.imgui_scene_final_ds != VK_NULL_HANDLE)
-            {
-                if (can_remove_imgui_textures)
-                    ImGui_ImplVulkan_RemoveTexture(t.imgui_scene_final_ds);
-                t.imgui_scene_final_ds = VK_NULL_HANDLE;
-            }
-            if (t.framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device, t.framebuffer, nullptr);
-            if (t.ao_raw_framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device, t.ao_raw_framebuffer, nullptr);
-            if (t.ao_framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device, t.ao_framebuffer, nullptr);
-            for (VkFramebuffer shadow_fb : t.shadow_framebuffers)
-            {
-                if (shadow_fb != VK_NULL_HANDLE)
-                    vkDestroyFramebuffer(device, shadow_fb, nullptr);
-            }
-            for (VkFramebuffer point_shadow_fb : t.point_shadow_framebuffers)
-            {
-                if (point_shadow_fb != VK_NULL_HANDLE)
-                    vkDestroyFramebuffer(device, point_shadow_fb, nullptr);
-            }
-            if (t.scene_framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device, t.scene_framebuffer, nullptr);
-            if (t.scene_post_framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device, t.scene_post_framebuffer, nullptr);
-            if (t.normal_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.normal_view, nullptr);
-            if (t.normal_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.normal_image, t.normal_alloc);
-            if (t.ao_raw_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.ao_raw_view, nullptr);
-            if (t.ao_raw_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.ao_raw_image, t.ao_raw_alloc);
-            if (t.ao_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.ao_view, nullptr);
-            if (t.ao_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.ao_image, t.ao_alloc);
-            if (t.depth_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.depth_view, nullptr);
-            if (t.depth_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.depth_image, t.depth_alloc);
-            for (size_t cascade_index = 0; cascade_index < kShadowCascadeCount; ++cascade_index)
-            {
-                if (t.shadow_views[cascade_index] != VK_NULL_HANDLE)
-                    vkDestroyImageView(device, t.shadow_views[cascade_index], nullptr);
-                if (t.shadow_images[cascade_index] != VK_NULL_HANDLE)
-                    vmaDestroyImage(allocator, t.shadow_images[cascade_index], t.shadow_allocs[cascade_index]);
-            }
-            for (VkImageView point_shadow_face_view : t.point_shadow_face_views)
-            {
-                if (point_shadow_face_view != VK_NULL_HANDLE)
-                    vkDestroyImageView(device, point_shadow_face_view, nullptr);
-            }
-            if (t.point_shadow_cube_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.point_shadow_cube_view, nullptr);
-            if (t.point_shadow_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.point_shadow_image, t.point_shadow_alloc);
-            if (t.point_shadow_depth_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.point_shadow_depth_view, nullptr);
-            if (t.point_shadow_depth_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.point_shadow_depth_image, t.point_shadow_depth_alloc);
-            if (t.scene_color_msaa_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.scene_color_msaa_view, nullptr);
-            if (t.scene_color_msaa_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.scene_color_msaa_image, t.scene_color_msaa_alloc);
-            if (t.scene_depth_msaa_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.scene_depth_msaa_view, nullptr);
-            if (t.scene_depth_msaa_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.scene_depth_msaa_image, t.scene_depth_msaa_alloc);
-            if (t.scene_hdr_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.scene_hdr_view, nullptr);
-            if (t.scene_hdr_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.scene_hdr_image, t.scene_hdr_alloc);
-            if (t.scene_final_srgb_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.scene_final_srgb_view, nullptr);
-            if (t.scene_final_unorm_view != VK_NULL_HANDLE)
-                vkDestroyImageView(device, t.scene_final_unorm_view, nullptr);
-            if (t.scene_final_image != VK_NULL_HANDLE)
-                vmaDestroyImage(allocator, t.scene_final_image, t.scene_final_alloc);
+            destroy_gbuffer_target(t);
         }
         gbuffer_targets.clear();
+        for (auto& retired : retired_gbuffer_targets)
+            destroy_gbuffer_target(retired.targets);
+        retired_gbuffer_targets.clear();
     }
 
     void destroy_gbuffer()
@@ -3071,25 +3131,32 @@ struct CodeVizScenePass::State
         return true;
     }
 
-    bool ensure_gbuffer_targets(uint32_t frame_count, int width, int height)
+    bool ensure_gbuffer_targets(uint32_t frame_count, uint32_t frame_index, int width, int height)
     {
         PERF_MEASURE();
         if (width <= 0 || height <= 0)
             return false;
 
         frame_count = std::max(1u, frame_count);
-        if (gbuffer_targets.size() == frame_count
-            && !gbuffer_targets.empty()
-            && gbuffer_targets[0].width == width
-            && gbuffer_targets[0].height == height)
+        if (gbuffer_targets.size() != frame_count)
+        {
+            if (!gbuffer_targets.empty())
+                wait_for_device_idle();
+            destroy_gbuffer_targets();
+            gbuffer_targets.resize(frame_count);
+        }
+        if (frame_index >= gbuffer_targets.size())
+            return false;
+
+        auto& t = gbuffer_targets[frame_index];
+        if (t.width == width && t.height == height && t.framebuffer != VK_NULL_HANDLE)
             return true;
 
-        if (!gbuffer_targets.empty())
-            wait_for_device_idle();
-        destroy_gbuffer_targets();
-        gbuffer_targets.resize(frame_count);
-
-        for (auto& t : gbuffer_targets)
+        // Draxul has already waited for this frame slot's fence before invoking
+        // the plugin. Rebuild only this slot so interactive pane resizing does
+        // not stall the entire device. The old target is retired because ImGui
+        // draw data recorded into this frame can still reference its textures.
+        retire_gbuffer_target(t, frame_index);
         {
             bool shadow_ok = true;
             for (size_t cascade_index = 0; cascade_index < kShadowCascadeCount; ++cascade_index)
@@ -3282,7 +3349,7 @@ struct CodeVizScenePass::State
                     t.scene_final_unorm_view))
             {
                 DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create offscreen scene targets");
-                destroy_gbuffer_targets();
+                destroy_gbuffer_target(t);
                 return false;
             }
 
@@ -3300,7 +3367,7 @@ struct CodeVizScenePass::State
                     != VK_SUCCESS)
                 {
                     DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create shadow framebuffer");
-                    destroy_gbuffer_targets();
+                    destroy_gbuffer_target(t);
                     return false;
                 }
             }
@@ -3323,7 +3390,7 @@ struct CodeVizScenePass::State
                     != VK_SUCCESS)
                 {
                     DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create point shadow framebuffer");
-                    destroy_gbuffer_targets();
+                    destroy_gbuffer_target(t);
                     return false;
                 }
             }
@@ -3340,7 +3407,7 @@ struct CodeVizScenePass::State
             if (vkCreateFramebuffer(device, &fb_ci, nullptr, &t.framebuffer) != VK_SUCCESS)
             {
                 DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create GBuffer framebuffer");
-                destroy_gbuffer_targets();
+                destroy_gbuffer_target(t);
                 return false;
             }
 
@@ -3356,7 +3423,7 @@ struct CodeVizScenePass::State
             if (vkCreateFramebuffer(device, &ao_fb_ci, nullptr, &t.ao_raw_framebuffer) != VK_SUCCESS)
             {
                 DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create raw AO framebuffer");
-                destroy_gbuffer_targets();
+                destroy_gbuffer_target(t);
                 return false;
             }
 
@@ -3365,7 +3432,7 @@ struct CodeVizScenePass::State
             if (vkCreateFramebuffer(device, &ao_fb_ci, nullptr, &t.ao_framebuffer) != VK_SUCCESS)
             {
                 DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create AO framebuffer");
-                destroy_gbuffer_targets();
+                destroy_gbuffer_target(t);
                 return false;
             }
 
@@ -3384,7 +3451,7 @@ struct CodeVizScenePass::State
             if (vkCreateFramebuffer(device, &scene_fb_ci, nullptr, &t.scene_framebuffer) != VK_SUCCESS)
             {
                 DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create scene framebuffer");
-                destroy_gbuffer_targets();
+                destroy_gbuffer_target(t);
                 return false;
             }
 
@@ -3399,16 +3466,16 @@ struct CodeVizScenePass::State
             if (vkCreateFramebuffer(device, &scene_post_fb_ci, nullptr, &t.scene_post_framebuffer) != VK_SUCCESS)
             {
                 DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create scene post framebuffer");
-                destroy_gbuffer_targets();
+                destroy_gbuffer_target(t);
                 return false;
             }
 
             t.width = width;
             t.height = height;
         }
-        refresh_gbuffer_descriptors();
-        refresh_prepass_descriptors();
-        refresh_post_descriptors();
+        refresh_gbuffer_descriptors(frame_index, 1);
+        refresh_prepass_descriptors(frame_index, 1);
+        refresh_post_descriptors(frame_index, 1);
         return true;
     }
 
@@ -3545,14 +3612,16 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
 
     if (!state_->init_gbuffer())
         return;
-    if (!state_->ensure_gbuffer_targets(frame_count, vw, vh))
+    // This frame slot's fence has completed. Reclaim resources retired the
+    // previous time the slot was used before a resize can retire new ones.
+    state_->reclaim_retired_resources(frame_index);
+    if (!state_->ensure_gbuffer_targets(frame_count, frame_index, vw, vh))
         return;
     if (frame_index >= state_->gbuffer_targets.size())
         return;
     if (frame_index >= state_->frame_resources.size())
         return;
 
-    state_->reclaim_retired_resources(frame_index);
     state_->last_prepass_frame = frame_index;
     auto& gbuffer = state_->gbuffer_targets[frame_index];
     auto& frame_res = state_->frame_resources[frame_index];
@@ -4220,7 +4289,8 @@ void CodeVizScenePass::record(IRenderContext& ctx)
     const uint32_t frame_index = vk_ctx->frame_index();
     if (!state_->ensure(*vk_ctx))
         return;
-    if (!state_->ensure_gbuffer_targets(std::max(1u, vk_ctx->buffered_frame_count()), ctx.viewport_w(), ctx.viewport_h()))
+    if (!state_->ensure_gbuffer_targets(
+            std::max(1u, vk_ctx->buffered_frame_count()), frame_index, ctx.viewport_w(), ctx.viewport_h()))
         return;
     if (frame_index >= state_->frame_resources.size() || frame_index >= state_->gbuffer_targets.size())
         return;
@@ -4308,6 +4378,12 @@ void CodeVizScenePass::render_gbuffer_debug_ui()
     if (t.normal_view == VK_NULL_HANDLE)
         return;
 
+    if (!ImGui::Begin("GBuffer Debug"))
+    {
+        ImGui::End();
+        return;
+    }
+
     // Lazily register GBuffer textures with ImGui Vulkan backend
     if (t.imgui_normal_ds == VK_NULL_HANDLE)
     {
@@ -4359,12 +4435,6 @@ void CodeVizScenePass::render_gbuffer_debug_ui()
     {
         t.imgui_scene_final_ds = ImGui_ImplVulkan_AddTexture(
             state_->gbuffer_sampler, t.scene_final_unorm_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    }
-
-    if (!ImGui::Begin("GBuffer Debug"))
-    {
-        ImGui::End();
-        return;
     }
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();

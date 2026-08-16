@@ -1,5 +1,7 @@
 #include "support/megacity_scene_test_support.h"
 
+#include "sign_label_atlas.h"
+
 #ifdef DRAXUL_ENABLE_MEGACITY
 
 TEST_CASE("megacity world maps grid coordinates to tile centers", "[megacity]")
@@ -115,6 +117,202 @@ TEST_CASE("MegaCity build_city consumes a neutral semantic snapshot", "[megacity
     REQUIRE(result.semantic_model->modules[0].module_path == "app");
     REQUIRE(result.semantic_model->modules[0].buildings.size() == 1);
     REQUIRE(result.semantic_model->modules[0].buildings[0].qualified_name == "Widget");
+}
+
+TEST_CASE("MegaCity build_city renders recursive populated-folder districts", "[megacity][treesitter]")
+{
+    CodebaseSnapshot snapshot;
+    snapshot.complete = true;
+
+    auto add_class = [&snapshot](std::string file_path, std::string class_name) {
+        ParsedFile file;
+        file.path = std::move(file_path);
+        file.symbols.push_back(SymbolRecord{
+            SymbolKind::Class,
+            std::move(class_name),
+            "",
+            false,
+            1,
+            12,
+            2,
+            {},
+            {},
+        });
+        snapshot.files.push_back(std::move(file));
+    };
+    add_class("plugins/alpha/core/alpha.cpp", "Alpha");
+    add_class("plugins/beta/core/beta.cpp", "Beta");
+
+    const CodeSemanticSnapshot semantics = build_code_semantic_snapshot(snapshot);
+    CodeVizSceneWorld world;
+    MegaCityCodeConfig config;
+    uint64_t sign_revision = 0;
+    const CityBuildResult result = build_city(world, semantics, nullptr, config, sign_revision);
+
+    REQUIRE(result.layout);
+    CHECK(result.layout->building_count() == 2);
+    CHECK(std::any_of(result.layout->folders.begin(), result.layout->folders.end(), [](const auto& folder) {
+        return folder.folder_path == "plugins";
+    }));
+    CHECK(std::any_of(result.layout->folders.begin(), result.layout->folders.end(), [](const auto& folder) {
+        return folder.folder_path == "plugins/alpha";
+    }));
+    CHECK(std::any_of(result.layout->folders.begin(), result.layout->folders.end(), [](const auto& folder) {
+        return folder.folder_path == "plugins/beta";
+    }));
+
+    std::unordered_map<std::string, int> boundary_segments_by_path;
+    auto boundary_view = world.registry().view<const ModuleSurfaceMetrics, const CodeVizSemanticRef>();
+    for (const entt::entity entity : boundary_view)
+    {
+        const auto& semantic_ref = boundary_view.get<const CodeVizSemanticRef>(entity);
+        ++boundary_segments_by_path[semantic_ref.module_path];
+    }
+    CHECK(boundary_segments_by_path["plugins"] == 4);
+    CHECK(boundary_segments_by_path["plugins/alpha"] == 4);
+    CHECK(boundary_segments_by_path["plugins/beta"] == 4);
+    CHECK(boundary_segments_by_path["plugins/alpha/core"] == 4);
+    CHECK(boundary_segments_by_path["plugins/beta/core"] == 4);
+}
+
+TEST_CASE("MegaCity omits boundaries below conventional include and src roots", "[megacity][treesitter]")
+{
+    CodebaseSnapshot snapshot;
+    snapshot.complete = true;
+
+    auto add_class = [&snapshot](std::string file_path, std::string class_name) {
+        ParsedFile file;
+        file.path = std::move(file_path);
+        file.symbols.push_back(SymbolRecord{
+            SymbolKind::Class,
+            std::move(class_name),
+            "",
+            false,
+            1,
+            12,
+            2,
+            {},
+            {},
+        });
+        snapshot.files.push_back(std::move(file));
+    };
+
+    const std::string project = "plugins/widget/product/widget-core";
+    add_class(project + "/include/widget/api.h", "Api");
+    add_class(project + "/include/widget/detail/state.h", "State");
+    add_class(project + "/src/api.cpp", "ApiImpl");
+    add_class(project + "/src/internal/worker.cpp", "Worker");
+
+    CodeVizSceneWorld world;
+    MegaCityCodeConfig config;
+    uint64_t sign_revision = 0;
+    const CityBuildResult result = build_city(
+        world,
+        build_code_semantic_snapshot(snapshot),
+        nullptr,
+        config,
+        sign_revision);
+
+    REQUIRE(result.semantic_model);
+    REQUIRE(result.semantic_model->modules.size() == 1);
+    CHECK(result.semantic_model->modules[0].module_path == project);
+    CHECK(result.semantic_model->modules[0].buildings.size() == 4);
+
+    REQUIRE(result.layout);
+    CHECK(std::none_of(result.layout->folders.begin(), result.layout->folders.end(), [](const auto& folder) {
+        return folder.folder_path.find("/include") != std::string::npos
+            || folder.folder_path.find("/src") != std::string::npos;
+    }));
+    CHECK(std::none_of(result.layout->modules.begin(), result.layout->modules.end(), [](const auto& module) {
+        return module.module_path.find("/include") != std::string::npos
+            || module.module_path.find("/src") != std::string::npos;
+    }));
+}
+
+TEST_CASE("MegaCity nested boundary signs form a hierarchy-height staircase", "[megacity][treesitter]")
+{
+    TextService text_service;
+    if (!init_text_service(text_service))
+        SKIP("bundled font not found");
+
+    CodebaseSnapshot snapshot;
+    snapshot.complete = true;
+    ParsedFile file;
+    file.path = "plugins/x/very_long_folder_name/d/example.cpp";
+    file.symbols.push_back(SymbolRecord{
+        SymbolKind::Class,
+        "Tower",
+        "",
+        false,
+        1,
+        12,
+        1,
+        {},
+        {},
+    });
+    snapshot.files.push_back(std::move(file));
+
+    CodeVizSceneWorld world;
+    MegaCityCodeConfig config;
+    uint64_t sign_revision = 1;
+    const CityBuildResult result = build_city(
+        world,
+        build_code_semantic_snapshot(snapshot),
+        &text_service,
+        config,
+        sign_revision);
+
+    std::unordered_map<std::string, std::vector<float>> sign_heights_by_path;
+    auto sign_view = world.registry().view<const SignMetrics, const CodeVizSemanticRef>();
+    for (const entt::entity entity : sign_view)
+    {
+        const auto& semantic_ref = sign_view.get<const CodeVizSemanticRef>(entity);
+        if (!semantic_ref.file.empty())
+            continue;
+        sign_heights_by_path[semantic_ref.module_path].push_back(
+            sign_view.get<const SignMetrics>(entity).height);
+    }
+
+    REQUIRE(sign_heights_by_path["plugins"].size() == 2);
+    const float base_height = sign_heights_by_path["plugins"].front();
+    REQUIRE(base_height > 0.0f);
+    for (const auto& [path, level] : std::array{
+             std::pair{ std::string_view("plugins"), 1 },
+             std::pair{ std::string_view("plugins/x"), 2 },
+             std::pair{ std::string_view("plugins/x/very_long_folder_name"), 3 },
+             std::pair{ std::string_view("plugins/x/very_long_folder_name/d"), 4 },
+         })
+    {
+        REQUIRE_FALSE(sign_heights_by_path[std::string(path)].empty());
+        for (const float height : sign_heights_by_path[std::string(path)])
+            CHECK(height == Catch::Approx(base_height * static_cast<float>(level)).margin(1e-4f));
+    }
+
+    REQUIRE(result.sign_label_atlas);
+    const SignAtlasEntry& base_label = result.sign_label_atlas->entries.at("module:plugins");
+    const SignAtlasEntry& deepest_label
+        = result.sign_label_atlas->entries.at("module:plugins/x/very_long_folder_name/d");
+    REQUIRE(deepest_label.pixel_size.y == base_label.pixel_size.y * 4);
+
+    const int atlas_x = static_cast<int>(
+        deepest_label.uv_rect.x * static_cast<float>(result.sign_label_atlas->image.width) + 0.5f);
+    const int atlas_y = static_cast<int>(
+        deepest_label.uv_rect.y * static_cast<float>(result.sign_label_atlas->image.height) + 0.5f);
+    int last_ink_row = -1;
+    for (int y = 0; y < deepest_label.pixel_size.y; ++y)
+    {
+        for (int x = 0; x < deepest_label.pixel_size.x; ++x)
+        {
+            const size_t alpha_offset = static_cast<size_t>(
+                ((atlas_y + y) * result.sign_label_atlas->image.width + atlas_x + x) * 4 + 3);
+            if (result.sign_label_atlas->image.rgba[alpha_offset] != 0)
+                last_ink_row = std::max(last_ink_row, y);
+        }
+    }
+    CHECK(last_ink_row >= 0);
+    CHECK(last_ink_row < base_label.pixel_size.y);
+
+    text_service.shutdown();
 }
 
 TEST_CASE("BioView analysis panel does not expose city-only controls", "[megacity][bioview]")
@@ -407,7 +605,7 @@ TEST_CASE("megacity module signs are placed on module border strips", "[megacity
     const auto module_it = std::find_if(
         build.layout->modules.begin(),
         build.layout->modules.end(),
-        [](const SemanticCityModuleLayout& module) { return module.module_path == "src"; });
+        [](const SemanticCityModuleLayout& module) { return module.module_path == "."; });
     REQUIRE(module_it != build.layout->modules.end());
     const SemanticCityModuleLayout& module_layout = *module_it;
     const float extent_x = module_layout.max_x - module_layout.min_x;
@@ -829,7 +1027,7 @@ TEST_CASE("megacity building roof sign expands for long text", "[megacity]")
     {
         const auto& metrics = sign_view.get<const SignMetrics>(entity);
         const auto& source = sign_view.get<const CodeVizSemanticRef>(entity);
-        if (source.file != "src/example.cpp" || source.name != kBuildingName || source.module_path != "src")
+        if (source.file != "src/example.cpp" || source.name != kBuildingName || source.module_path != ".")
             continue;
         found_building_sign = true;
         CHECK(metrics.width >= expected_min_sign_width - 1e-4f);

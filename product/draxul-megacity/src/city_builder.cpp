@@ -14,6 +14,7 @@
 #include <draxul/building_generator.h>
 #include <draxul/log.h>
 #include <draxul/megacity_code_config.h>
+#include <draxul/module_path_resolver.h>
 #include <draxul/perf_timing.h>
 #include <draxul/roof_sign_generator.h>
 #include <draxul/text_service.h>
@@ -59,6 +60,7 @@ struct SignPlacementSpec
     float depth = 0.25f;
     float yaw_radians = 0.0f;
     CodeVizMeshId mesh = kCityWallSignMesh;
+    int hierarchy_level = 1;
 };
 
 struct RoofSignPlacementSpec
@@ -466,6 +468,49 @@ std::string module_display_name(std::string_view module_path)
     return !leaf.empty() ? leaf : std::string(module_path);
 }
 
+int module_hierarchy_level(std::string_view module_path)
+{
+    int level = 0;
+    bool inside_component = false;
+    for (const char character : module_path)
+    {
+        const bool separator = character == '/' || character == '\\';
+        if (separator)
+        {
+            inside_component = false;
+        }
+        else if (!inside_component)
+        {
+            ++level;
+            inside_component = true;
+        }
+    }
+    return std::max(level, 1);
+}
+
+std::string_view module_root_name(std::string_view module_path)
+{
+    const size_t separator = module_path.find_first_of("/\\");
+    return separator == std::string_view::npos ? module_path : module_path.substr(0, separator);
+}
+
+float module_sign_level_height(
+    std::string_view module_path, const TextService* text_service, const MegaCityCodeConfig& config)
+{
+    const std::string_view root_name = module_root_name(module_path);
+    const float base_width = std::max(config.park_footprint, 0.35f);
+    float height = base_width * 0.25f;
+    if (text_service && !root_name.empty())
+    {
+        const int cw = std::max(text_service->metrics().cell_width, 1);
+        const int ch = std::max(text_service->metrics().cell_height, 1);
+        const float aspect = static_cast<float>(ch) / static_cast<float>(cw);
+        const float char_width = base_width / static_cast<float>(root_name.size());
+        height = char_width * aspect + 2.0f * config.road_sign_edge_inset;
+    }
+    return std::max(0.24f, height);
+}
+
 float compute_building_sign_height(
     const SemanticCityBuilding& building, std::string_view text, const TextService* text_service,
     const MegaCityCodeConfig& config, float face_width)
@@ -540,23 +585,16 @@ RoofSignPlacementSpec place_building_roof_sign(
 // Returns two signs for a module: [0] on the south border facing south, [1] on the north border facing north.
 // The label sits on the module outline rather than over the park.
 std::array<SignPlacementSpec, 2> place_module_boundary_signs(
-    const SemanticCityModuleLayout& module_layout, std::string_view text, const TextService* text_service,
-    const MegaCityCodeConfig& config)
+    const SemanticCityModuleLayout& module_layout, std::string_view, const TextService* text_service,
+    const MegaCityCodeConfig& config, int hierarchy_level)
 {
     PERF_MEASURE();
     const std::array<ModuleBoundarySignPlacement, 2> placements
         = build_module_boundary_sign_placements(module_layout, config);
 
-    float sign_height = placements[0].width * 0.25f;
-    if (text_service && !text.empty())
-    {
-        const int cw = std::max(text_service->metrics().cell_width, 1);
-        const int ch = std::max(text_service->metrics().cell_height, 1);
-        const float aspect = static_cast<float>(ch) / static_cast<float>(cw);
-        const float char_width = placements[0].width / std::max(static_cast<float>(text.size()), 1.0f);
-        sign_height = char_width * aspect + 2.0f * config.road_sign_edge_inset;
-    }
-    sign_height = std::max(0.24f, sign_height);
+    const int clamped_hierarchy_level = std::max(hierarchy_level, 1);
+    const float sign_height = module_sign_level_height(module_layout.module_path, text_service, config)
+        * static_cast<float>(clamped_hierarchy_level);
 
     std::array<SignPlacementSpec, 2> signs;
     for (size_t index = 0; index < placements.size(); ++index)
@@ -567,6 +605,7 @@ std::array<SignPlacementSpec, 2> place_module_boundary_signs(
         signs[index].depth = placements[index].depth;
         signs[index].yaw_radians = placements[index].yaw_radians;
         signs[index].mesh = kCityWallSignMesh;
+        signs[index].hierarchy_level = clamped_hierarchy_level;
     }
     return signs;
 }
@@ -592,13 +631,17 @@ SignLabelRequest make_sign_request(
         pixel_height = 16;
     }
 
+    const int hierarchy_level = building_sign ? 1 : std::max(placement.hierarchy_level, 1);
+    pixel_height *= hierarchy_level;
+
     const glm::vec3& text_color = building_sign ? config.building_sign_text_color : config.module_sign_text_color;
     return SignLabelRequest{
         .key = std::move(key),
         .text = std::string(text),
         .target_pixel_width = pixel_width,
         .target_pixel_height = pixel_height,
-        .vertical_align = SignLabelVerticalAlign::Center,
+        .vertical_align = building_sign ? SignLabelVerticalAlign::Center : SignLabelVerticalAlign::Top,
+        .top_padding = building_sign ? 0 : std::max(config.wall_sign_text_padding, 0),
         .text_r = color_channel_to_byte(text_color.r),
         .text_g = color_channel_to_byte(text_color.g),
         .text_b = color_channel_to_byte(text_color.b),
@@ -899,7 +942,7 @@ struct CitySemanticProjection
         CityClassRecord row;
         row.name = node.name;
         row.qualified_name = node.qualified_name;
-        row.module_path = node.module_path;
+        row.module_path = source_folder_path_for_source_file(node.source.file_path);
         row.source_file_path = node.source.file_path;
         row.entity_kind = spec.entity_kind;
         row.is_struct = node.type_kind == CodeSemanticTypeKind::Struct && node.metrics.method_count == 0;
@@ -1134,7 +1177,7 @@ CityBuildResult build_city(
     // Build sign label requests.
     constexpr size_t kMaxSignChars = 15;
     std::vector<SignLabelRequest> sign_requests;
-    sign_requests.reserve(layout->building_count() + layout->modules.size());
+    sign_requests.reserve(layout->building_count() + layout->modules.size() + layout->folders.size());
     for (const auto& module_layout : layout->modules)
     {
         for (const auto& building : module_layout.buildings)
@@ -1165,7 +1208,8 @@ CityBuildResult build_city(
                 module_layout,
                 name,
                 text_service,
-                config);
+                config,
+                module_hierarchy_level(module_layout.module_path));
             // Both signs share the same atlas entry (same text/key).
             auto request = make_sign_request(
                 module_sign_key(module_layout.module_path), name, boundary_signs[0], text_service, config, false);
@@ -1174,6 +1218,24 @@ CityBuildResult build_city(
             request.text_b = 255;
             sign_requests.push_back(std::move(request));
         }
+    }
+    for (const auto& folder_layout : layout->folders)
+    {
+        SemanticCityModuleLayout boundary;
+        boundary.module_path = folder_layout.folder_path;
+        boundary.min_x = folder_layout.min_x;
+        boundary.max_x = folder_layout.max_x;
+        boundary.min_z = folder_layout.min_z;
+        boundary.max_z = folder_layout.max_z;
+        const std::string name = module_display_name(folder_layout.folder_path);
+        const auto boundary_signs = place_module_boundary_signs(
+            boundary, name, text_service, config, std::max(folder_layout.depth, 1));
+        auto request = make_sign_request(
+            module_sign_key(folder_layout.folder_path), name, boundary_signs[0], text_service, config, false);
+        request.text_r = 255;
+        request.text_g = 255;
+        request.text_b = 255;
+        sign_requests.push_back(std::move(request));
     }
 
     std::shared_ptr<SignLabelAtlas> sign_label_atlas;
@@ -1301,6 +1363,61 @@ CityBuildResult build_city(
             module_color,
             CodeVizSemanticRef{ "", module_layout.module_path, module_layout.module_path },
             module_surface_elevation);
+    }
+
+    for (const auto& folder_layout : layout->folders)
+    {
+        SemanticCityModuleLayout boundary;
+        boundary.module_path = folder_layout.folder_path;
+        boundary.min_x = folder_layout.min_x;
+        boundary.max_x = folder_layout.max_x;
+        boundary.min_z = folder_layout.min_z;
+        boundary.max_z = folder_layout.max_z;
+
+        const float extent_x = boundary.max_x - boundary.min_x;
+        const float extent_z = boundary.max_z - boundary.min_z;
+        const float border_width = compute_module_border_width(boundary, config);
+        if (extent_x <= 1e-4f || extent_z <= 1e-4f || border_width <= 1e-4f)
+            continue;
+
+        const glm::vec4 base_color = module_building_color(boundary.module_path);
+        const glm::vec4 folder_color(
+            glm::vec3(base_color),
+            base_color.a * config.module_border_alpha * 0.75f);
+        const float center_x = (boundary.min_x + boundary.max_x) * 0.5f;
+        const float center_z = (boundary.min_z + boundary.max_z) * 0.5f;
+        const float inner_extent_z = std::max(extent_z - 2.0f * border_width, border_width);
+        const float elevation = module_surface_elevation
+            + static_cast<float>(std::max(folder_layout.depth, 0)) * 0.001f;
+
+        world.create_module_surface(
+            center_x,
+            boundary.max_z - border_width * 0.5f,
+            ModuleSurfaceMetrics{ extent_x, border_width, kModuleSurfaceHeight },
+            folder_color,
+            CodeVizSemanticRef{ "", boundary.module_path, boundary.module_path },
+            elevation);
+        world.create_module_surface(
+            center_x,
+            boundary.min_z + border_width * 0.5f,
+            ModuleSurfaceMetrics{ extent_x, border_width, kModuleSurfaceHeight },
+            folder_color,
+            CodeVizSemanticRef{ "", boundary.module_path, boundary.module_path },
+            elevation);
+        world.create_module_surface(
+            boundary.min_x + border_width * 0.5f,
+            center_z,
+            ModuleSurfaceMetrics{ border_width, inner_extent_z, kModuleSurfaceHeight },
+            folder_color,
+            CodeVizSemanticRef{ "", boundary.module_path, boundary.module_path },
+            elevation);
+        world.create_module_surface(
+            boundary.max_x - border_width * 0.5f,
+            center_z,
+            ModuleSurfaceMetrics{ border_width, inner_extent_z, kModuleSurfaceHeight },
+            folder_color,
+            CodeVizSemanticRef{ "", boundary.module_path, boundary.module_path },
+            elevation);
     }
 
     for (const auto& module_layout : layout->modules)
@@ -1494,7 +1611,8 @@ CityBuildResult build_city(
                     module_layout,
                     name,
                     text_service,
-                    config);
+                    config,
+                    module_hierarchy_level(module_layout.module_path));
 
                 // Place both signs on the module border so the label sits on the outline itself.
                 for (const SignPlacementSpec& boundary_sign : boundary_signs)
@@ -1518,9 +1636,47 @@ CityBuildResult build_city(
         }
     }
 
+    if (sign_label_atlas)
+    {
+        for (const auto& folder_layout : layout->folders)
+        {
+            const auto it = sign_label_atlas->entries.find(module_sign_key(folder_layout.folder_path));
+            if (it == sign_label_atlas->entries.end())
+                continue;
+
+            SemanticCityModuleLayout boundary;
+            boundary.module_path = folder_layout.folder_path;
+            boundary.min_x = folder_layout.min_x;
+            boundary.max_x = folder_layout.max_x;
+            boundary.min_z = folder_layout.min_z;
+            boundary.max_z = folder_layout.max_z;
+            const std::string name = module_display_name(folder_layout.folder_path);
+            const auto boundary_signs = place_module_boundary_signs(
+                boundary, name, text_service, config, std::max(folder_layout.depth, 1));
+
+            for (const SignPlacementSpec& boundary_sign : boundary_signs)
+            {
+                const SignMetrics sign = make_sign_metrics(boundary_sign, it->second);
+                const float elevation = kRoadSurfaceTextureLift
+                    + config.road_surface_height
+                    + kModuleSurfaceLift
+                    + static_cast<float>(std::max(folder_layout.depth, 0)) * 0.001f;
+                world.create_sign(
+                    boundary_sign.center.x,
+                    boundary_sign.center.y,
+                    elevation + kModuleSurfaceHeight + sign.height * 0.5f + config.road_sign_lift,
+                    sign,
+                    boundary_sign.mesh,
+                    dark_module_sign_board_color(folder_layout.folder_path),
+                    CodeVizSemanticRef{ "", folder_layout.folder_path, folder_layout.folder_path });
+            }
+        }
+    }
+
     DRAXUL_LOG_INFO(LogCategory::App,
-        "CityBuilder: built semantic megacity with %zu modules and %zu buildings",
+        "CityBuilder: built semantic megacity with %zu modules, %zu folder districts, and %zu buildings",
         layout->modules.size(),
+        layout->folders.size(),
         layout->building_count());
     DRAXUL_LOG_INFO(LogCategory::App,
         "CityBuilder: static mesh family cache retained %zu reusable meshes",

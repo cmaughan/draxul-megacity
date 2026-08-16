@@ -123,7 +123,7 @@ TEST_CASE("Code semantic snapshot feeds the city presentation model", "[megacity
     REQUIRE(city.semantic_model);
     REQUIRE(city.semantic_model->modules.size() == 1);
     const SemanticCityModuleModel& module = city.semantic_model->modules[0];
-    CHECK(module.module_path == "src");
+    CHECK(module.module_path == ".");
     CHECK(module.quality == module.health.complexity);
     CHECK(module.health.complexity == 0.5f);
     CHECK(module.health.cohesion > 0.45f);
@@ -151,11 +151,11 @@ TEST_CASE("Code semantic snapshot feeds the city presentation model", "[megacity
     const auto& dependencies = city.semantic_model->dependencies;
     REQUIRE(dependencies.size() == 1);
     CHECK(dependencies[0].source_qualified_name == "Widget");
-    CHECK(dependencies[0].source_module_path == "src");
+    CHECK(dependencies[0].source_module_path == ".");
     CHECK(dependencies[0].field_name == "owner");
     CHECK(dependencies[0].field_type_name == "IWidget*");
     CHECK(dependencies[0].target_qualified_name == "IWidget");
-    CHECK(dependencies[0].target_module_path == "src");
+    CHECK(dependencies[0].target_module_path == ".");
     CHECK(dependencies[0].source_file_path == "src/app/widget.cpp");
     CHECK(dependencies[0].target_file_path == "src/app/widget.cpp");
     CHECK(dependencies[0].is_abstract_ref);
@@ -292,6 +292,44 @@ TEST_CASE("Code semantic snapshot groups files by repository module boundary", "
     CHECK(find_building(*city.semantic_model, "MarkdownDocument"));
     CHECK(find_building(*city.semantic_model, "KanbanBoard"));
     CHECK(find_building(*city.semantic_model, "CitySource"));
+}
+
+TEST_CASE("City presentation folds include and src trees into their owning project", "[megacity][treesitter]")
+{
+    CodebaseSnapshot snapshot;
+    snapshot.complete = true;
+
+    auto add_class_file = [&](std::string path, std::string name) {
+        ParsedFile file;
+        file.path = std::move(path);
+        file.symbols.push_back(SymbolRecord{
+            SymbolKind::Class,
+            std::move(name),
+            "",
+            false,
+            1,
+            4,
+            1,
+            {},
+            {},
+        });
+        snapshot.files.push_back(std::move(file));
+    };
+
+    const std::string project = "plugins/widget/product/widget-core";
+    add_class_file(project + "/include/widget/api.h", "Api");
+    add_class_file(project + "/include/widget/detail/state.h", "State");
+    add_class_file(project + "/src/api.cpp", "ApiImpl");
+    add_class_file(project + "/src/internal/worker.cpp", "Worker");
+
+    const SemanticCodeModelBuildResult city = build_semantic_code_model(
+        build_code_semantic_snapshot(snapshot),
+        MegaCityCodeConfig{});
+
+    REQUIRE(city.semantic_model);
+    REQUIRE(city.semantic_model->modules.size() == 1);
+    CHECK(city.semantic_model->modules[0].module_path == project);
+    CHECK(city.semantic_model->modules[0].buildings.size() == 4);
 }
 
 TEST_CASE("City presentation does not cross-product nested type fields onto the parent class", "[megacity][treesitter]")

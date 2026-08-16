@@ -2,6 +2,8 @@
 
 #include <draxul/text_service.h>
 
+#include <algorithm>
+
 namespace draxul
 {
 
@@ -27,6 +29,7 @@ std::shared_ptr<SignLabelAtlas> build_sign_label_atlas(
         atlas_request.vertical_align = request.vertical_align == SignLabelVerticalAlign::Top
             ? TextAtlasVerticalAlign::Top
             : TextAtlasVerticalAlign::Center;
+        atlas_request.top_padding = std::max(request.top_padding, 0);
         atlas_request.color = {
             request.text_r,
             request.text_g,

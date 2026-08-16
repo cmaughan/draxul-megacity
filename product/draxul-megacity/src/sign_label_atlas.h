@@ -31,6 +31,7 @@ struct SignLabelRequest
     int target_pixel_height = 1;
     bool align_primary_to_start = false;
     SignLabelVerticalAlign vertical_align = SignLabelVerticalAlign::Center;
+    int top_padding = 0;
     uint8_t text_r = 0;
     uint8_t text_g = 0;
     uint8_t text_b = 0;

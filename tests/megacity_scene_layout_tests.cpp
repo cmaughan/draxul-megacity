@@ -958,6 +958,101 @@ TEST_CASE("semantic megacity layout spirals modules around the largest module", 
     CHECK(neighbor.buildings[0].module_path == neighbor.module_path);
 }
 
+TEST_CASE("semantic megacity layout recursively composes populated source folders", "[megacity]")
+{
+    auto make_module = [](std::string module_path, std::string building_name) {
+        SemanticCityModuleInput module;
+        module.module_path = std::move(module_path);
+
+        CityClassRecord building;
+        building.module_path = module.module_path;
+        building.qualified_name = std::move(building_name);
+        building.source_file_path = module.module_path + "/building.cpp";
+        building.entity_kind = "building";
+        building.base_size = 4;
+        building.building_functions = 2;
+        building.function_sizes = { 8, 5 };
+        module.rows.push_back(std::move(building));
+        return module;
+    };
+
+    const MegaCityCodeConfig config;
+    const SemanticMegacityLayout layout = build_semantic_megacity_layout({
+                                                                             make_module("app", "App"),
+                                                                             make_module("plugins/alpha/core", "AlphaCore"),
+                                                                             make_module("plugins/alpha/ui", "AlphaUi"),
+                                                                             make_module("plugins/beta", "Beta"),
+                                                                         },
+        config);
+
+    REQUIRE(layout.modules.size() == 5); // central park plus four populated leaf folders
+    CHECK(layout.building_count() == 4);
+
+    auto find_folder = [&layout](std::string_view path) {
+        return std::find_if(layout.folders.begin(), layout.folders.end(), [path](const auto& folder) {
+            return folder.folder_path == path;
+        });
+    };
+    auto find_module = [&layout](std::string_view path) {
+        return std::find_if(layout.modules.begin(), layout.modules.end(), [path](const auto& module) {
+            return module.module_path == path;
+        });
+    };
+    auto contains = [](const auto& outer, const auto& inner) {
+        return outer.min_x <= inner.min_x && outer.max_x >= inner.max_x
+            && outer.min_z <= inner.min_z && outer.max_z >= inner.max_z;
+    };
+    auto overlaps = [](const auto& a, const auto& b) {
+        return a.min_x < b.max_x && a.max_x > b.min_x
+            && a.min_z < b.max_z && a.max_z > b.min_z;
+    };
+
+    const auto plugins = find_folder("plugins");
+    const auto alpha = find_folder("plugins/alpha");
+    REQUIRE(plugins != layout.folders.end());
+    REQUIRE(alpha != layout.folders.end());
+    CHECK(plugins->depth == 1);
+    CHECK(alpha->depth == 2);
+
+    const auto core_module = find_module("plugins/alpha/core");
+    const auto ui_module = find_module("plugins/alpha/ui");
+    const auto beta_module = find_module("plugins/beta");
+    const auto app_module = find_module("app");
+    REQUIRE(core_module != layout.modules.end());
+    REQUIRE(ui_module != layout.modules.end());
+    REQUIRE(beta_module != layout.modules.end());
+    REQUIRE(app_module != layout.modules.end());
+    CHECK(contains(*plugins, *alpha));
+    CHECK(contains(*plugins, *beta_module));
+    CHECK(contains(*alpha, *core_module));
+    CHECK(contains(*alpha, *ui_module));
+    CHECK_FALSE(overlaps(*alpha, *beta_module));
+    CHECK_FALSE(overlaps(*core_module, *ui_module));
+    CHECK_FALSE(overlaps(*plugins, *app_module));
+}
+
+TEST_CASE("folder boundary signs stay at module scale", "[megacity]")
+{
+    MegaCityCodeConfig config;
+    config.park_footprint = 6.0f;
+
+    SemanticCityModuleLayout folder_proxy;
+    folder_proxy.module_path = "plugins";
+    folder_proxy.min_x = -80.0f;
+    folder_proxy.max_x = 80.0f;
+    folder_proxy.min_z = -40.0f;
+    folder_proxy.max_z = 40.0f;
+    folder_proxy.park_footprint = 0.0f;
+
+    const auto placements = build_module_boundary_sign_placements(folder_proxy, config);
+
+    for (const auto& placement : placements)
+    {
+        CHECK(placement.width == Catch::Approx(config.park_footprint));
+        CHECK(placement.width < folder_proxy.max_x - folder_proxy.min_x);
+    }
+}
+
 TEST_CASE("megacity mesh library builds expected primitive counts", "[megacity]")
 {
     const MeshData cube = build_unit_cube_mesh();

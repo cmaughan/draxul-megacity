@@ -6,9 +6,12 @@
 #include <cmath>
 #include <draxul/perf_timing.h>
 #include <functional>
+#include <iterator>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/norm.hpp>
 #include <limits>
+#include <map>
+#include <memory>
 #include <numbers>
 #include <numeric>
 #include <optional>
@@ -1383,9 +1386,13 @@ std::array<ModuleBoundarySignPlacement, 2> build_module_boundary_sign_placements
     const float extent_x = module_layout.max_x - module_layout.min_x;
     const float border_width = compute_module_border_width(module_layout, config);
     const float usable_width = std::max(0.35f, extent_x - 2.0f * border_width);
-    const float sign_width = module_layout.park_footprint > 0.0f
-        ? std::max(0.35f, std::min(module_layout.park_footprint, usable_width))
-        : usable_width;
+    // Leaf modules size their boundary signs from their park. Folder districts
+    // have no park, so use the configured park footprint as the same visual
+    // scale instead of stretching a sign across the entire recursive district.
+    const float preferred_width = module_layout.park_footprint > 0.0f
+        ? module_layout.park_footprint
+        : config.park_footprint;
+    const float sign_width = std::max(0.35f, std::min(preferred_width, usable_width));
     const float sign_depth = config.roof_sign_thickness * 0.5f;
     const float center_x = (module_layout.min_x + module_layout.max_x) * 0.5f;
 
@@ -1442,6 +1449,9 @@ CitySurfaceBounds compute_city_road_surface_bounds(const SemanticMegacityLayout&
                 module_layout.park_center.y - half_extent, module_layout.park_center.y + half_extent);
         }
     }
+
+    for (const auto& folder_layout : layout.folders)
+        expand(folder_layout.min_x, folder_layout.max_x, folder_layout.min_z, folder_layout.max_z);
 
     return bounds;
 }
@@ -1853,6 +1863,28 @@ SemanticMegacityLayout build_semantic_megacity_layout(
         float area = 0.0f;
     };
 
+    struct FolderNode
+    {
+        std::string path;
+        std::optional<size_t> module_index;
+        std::map<std::string, std::unique_ptr<FolderNode>> children;
+    };
+
+    struct ComposedDistrict
+    {
+        std::string path;
+        int connectivity = 0;
+        float area = 0.0f;
+        LotRect lot;
+        std::vector<SemanticCityModuleLayout> modules;
+        std::vector<SemanticCityFolderLayout> folders;
+
+        [[nodiscard]] bool empty() const
+        {
+            return modules.empty();
+        }
+    };
+
     std::vector<ModuleCandidate> candidates;
     candidates.reserve(model.modules.size());
     for (const auto& module_model : model.modules)
@@ -1879,30 +1911,54 @@ SemanticMegacityLayout build_semantic_megacity_layout(
         };
     }
 
-    // Most connected module first (hub of the codebase at the center),
-    // then by area, then by name.
-    std::sort(candidates.begin(), candidates.end(), [](const ModuleCandidate& a, const ModuleCandidate& b) {
-        if (a.connectivity != b.connectivity)
-            return a.connectivity > b.connectivity;
-        if (a.area != b.area)
-            return a.area > b.area;
-        return a.module_path < b.module_path;
-    });
-
     SemanticMegacityLayout megacity;
     if (candidates.empty())
         return megacity;
 
-    SpatialLotGrid module_grid;
-    module_grid.reserve(candidates.size() + 1);
-    megacity.min_x = std::numeric_limits<float>::max();
-    megacity.max_x = std::numeric_limits<float>::lowest();
-    megacity.min_z = std::numeric_limits<float>::max();
-    megacity.max_z = std::numeric_limits<float>::lowest();
+    FolderNode root;
+    for (size_t module_index = 0; module_index < candidates.size(); ++module_index)
+    {
+        std::string normalized = candidates[module_index].module_path;
+        std::replace(normalized.begin(), normalized.end(), '\\', '/');
+        while (normalized.starts_with("./"))
+            normalized.erase(0, 2);
 
-    // Place the central park module at the origin — it represents the whole codebase.
-    // Only shown in full city view (multiple modules), not single-module view.
-    // Central park is double the size of regular module parks.
+        if (normalized.empty() || normalized == ".")
+        {
+            root.module_index = module_index;
+            continue;
+        }
+
+        FolderNode* node = &root;
+        std::string path;
+        size_t component_start = 0;
+        while (component_start < normalized.size())
+        {
+            const size_t slash = normalized.find('/', component_start);
+            const size_t component_end = slash == std::string::npos ? normalized.size() : slash;
+            const std::string component = normalized.substr(component_start, component_end - component_start);
+            if (!component.empty())
+            {
+                if (!path.empty())
+                    path.push_back('/');
+                path.append(component);
+                auto& child = node->children[component];
+                if (!child)
+                {
+                    child = std::make_unique<FolderNode>();
+                    child->path = path;
+                }
+                node = child.get();
+            }
+            if (slash == std::string::npos)
+                break;
+            component_start = slash + 1;
+        }
+        node->module_index = module_index;
+    }
+
+    LotRect central_park_lot{};
+    bool has_central_park = false;
     if (candidates.size() > 1)
     {
         const float step = std::max(config.placement_step, 0.01f);
@@ -1929,82 +1985,208 @@ SemanticMegacityLayout build_semantic_megacity_layout(
         central.park_sidewalk_width = park_sw;
         central.park_road_width = park_rw;
 
-        module_grid.insert({ -park_lot_half, park_lot_half, -park_lot_half, park_lot_half });
+        central_park_lot = { -park_lot_half, park_lot_half, -park_lot_half, park_lot_half };
+        has_central_park = true;
         megacity.modules.push_back(std::move(central));
-        megacity.min_x = -park_lot_half;
-        megacity.max_x = park_lot_half;
-        megacity.min_z = -park_lot_half;
-        megacity.max_z = park_lot_half;
     }
 
-    for (const ModuleCandidate& candidate : candidates)
-    {
-        glm::vec2 chosen_offset{ 0.0f };
-        LotRect chosen_lot{};
-        bool placed = false;
-
-        const std::vector<glm::vec2> contact_candidates = touching_lot_candidates(module_grid, candidate.local_lot, config);
-        for (const glm::vec2& offset : contact_candidates)
+    const auto translate_district = [](ComposedDistrict& district, const glm::vec2& offset) {
+        for (auto& module : district.modules)
         {
-            if (try_place_candidate(module_grid, candidate.local_lot, offset, chosen_offset, chosen_lot))
+            module.offset += offset;
+            module.min_x += offset.x;
+            module.max_x += offset.x;
+            module.min_z += offset.y;
+            module.max_z += offset.y;
+            module.park_center += offset;
+            for (auto& building : module.buildings)
+                building.center += offset;
+        }
+        for (auto& folder : district.folders)
+        {
+            folder.min_x += offset.x;
+            folder.max_x += offset.x;
+            folder.min_z += offset.y;
+            folder.max_z += offset.y;
+        }
+        district.lot = translate_lot(district.lot, offset);
+    };
+
+    std::function<ComposedDistrict(FolderNode&, int, bool)> compose_folder;
+    compose_folder = [&](FolderNode& node, int depth, bool is_root) -> ComposedDistrict {
+        std::vector<ComposedDistrict> items;
+        items.reserve(node.children.size() + (node.module_index.has_value() ? 1u : 0u));
+
+        if (node.module_index.has_value())
+        {
+            ModuleCandidate& candidate = candidates[*node.module_index];
+            ComposedDistrict module;
+            module.path = candidate.module_path;
+            module.connectivity = candidate.connectivity;
+            module.area = candidate.area;
+            module.lot = candidate.local_lot;
+
+            SemanticCityModuleLayout module_layout;
+            module_layout.module_path = candidate.module_path;
+            module_layout.min_x = candidate.local_lot.min_x;
+            module_layout.max_x = candidate.local_lot.max_x;
+            module_layout.min_z = candidate.local_lot.min_z;
+            module_layout.max_z = candidate.local_lot.max_z;
+            module_layout.quality = candidate.quality;
+            module_layout.health = candidate.health;
+            module_layout.park_center = candidate.layout.park_center;
+            module_layout.park_footprint = candidate.layout.park_footprint;
+            module_layout.park_sidewalk_width = candidate.layout.park_sidewalk_width;
+            module_layout.park_road_width = candidate.layout.park_road_width;
+            module_layout.buildings = candidate.layout.buildings;
+            module.modules.push_back(std::move(module_layout));
+            items.push_back(std::move(module));
+        }
+
+        for (auto& [_, child] : node.children)
+        {
+            ComposedDistrict composed = compose_folder(*child, depth + 1, false);
+            if (!composed.empty())
+                items.push_back(std::move(composed));
+        }
+
+        std::sort(items.begin(), items.end(), [](const ComposedDistrict& a, const ComposedDistrict& b) {
+            if (a.connectivity != b.connectivity)
+                return a.connectivity > b.connectivity;
+            if (a.area != b.area)
+                return a.area > b.area;
+            return a.path < b.path;
+        });
+
+        ComposedDistrict result;
+        result.path = node.path;
+        if (items.empty())
+            return result;
+
+        SpatialLotGrid grid;
+        grid.reserve(items.size() + (is_root && has_central_park ? 1u : 0u));
+        if (is_root && has_central_park)
+            grid.insert(central_park_lot);
+
+        bool have_bounds = false;
+        for (ComposedDistrict& item : items)
+        {
+            glm::vec2 chosen_offset{ 0.0f };
+            LotRect chosen_lot{};
+            bool placed = false;
+
+            for (const glm::vec2& offset : touching_lot_candidates(grid, item.lot, config))
             {
-                placed = true;
-                break;
+                if (try_place_candidate(grid, item.lot, offset, chosen_offset, chosen_lot))
+                {
+                    placed = true;
+                    break;
+                }
+            }
+
+            if (!placed)
+            {
+                const float lot_width = item.lot.max_x - item.lot.min_x;
+                const float lot_depth = item.lot.max_z - item.lot.min_z;
+                const float item_step = std::max(
+                    std::min(lot_width, lot_depth) * 0.5f,
+                    std::max(config.placement_step, 0.01f));
+                for_each_spiral_candidate(
+                    item_step,
+                    config.max_spiral_rings,
+                    [&grid, &item, &chosen_offset, &chosen_lot, &placed](const glm::vec2& offset) {
+                        if (!try_place_candidate(grid, item.lot, offset, chosen_offset, chosen_lot))
+                            return true;
+                        placed = true;
+                        return false;
+                    });
+            }
+
+            if (!placed)
+                continue;
+
+            translate_district(item, chosen_offset);
+            grid.insert(chosen_lot);
+            result.connectivity += item.connectivity;
+            result.modules.insert(
+                result.modules.end(),
+                std::make_move_iterator(item.modules.begin()),
+                std::make_move_iterator(item.modules.end()));
+            result.folders.insert(
+                result.folders.end(),
+                std::make_move_iterator(item.folders.begin()),
+                std::make_move_iterator(item.folders.end()));
+
+            if (!have_bounds)
+            {
+                result.lot = chosen_lot;
+                have_bounds = true;
+            }
+            else
+            {
+                result.lot.min_x = std::min(result.lot.min_x, chosen_lot.min_x);
+                result.lot.max_x = std::max(result.lot.max_x, chosen_lot.max_x);
+                result.lot.min_z = std::min(result.lot.min_z, chosen_lot.min_z);
+                result.lot.max_z = std::max(result.lot.max_z, chosen_lot.max_z);
             }
         }
 
-        if (!placed)
-        {
-            const float lot_width = candidate.local_lot.max_x - candidate.local_lot.min_x;
-            const float lot_depth = candidate.local_lot.max_z - candidate.local_lot.min_z;
-            const float module_step = std::max(std::min(lot_width, lot_depth) * 0.5f, std::max(config.placement_step, 0.01f));
-            for_each_spiral_candidate(module_step, config.max_spiral_rings, [&module_grid, &candidate, &chosen_offset, &chosen_lot, &placed](const glm::vec2& offset) {
-                if (!try_place_candidate(module_grid, candidate.local_lot, offset, chosen_offset, chosen_lot))
-                    return true;
+        if (!have_bounds)
+            return {};
 
-                placed = true;
-                return false;
+        if (!is_root && (!node.children.empty() || !node.module_index.has_value()))
+        {
+            const float padding = std::max(config.placement_step * 2.0f, kModuleSurfaceBorderWidthMin * 4.0f);
+            result.lot.min_x -= padding;
+            result.lot.max_x += padding;
+            result.lot.min_z -= padding;
+            result.lot.max_z += padding;
+            result.folders.push_back(SemanticCityFolderLayout{
+                node.path,
+                depth,
+                result.lot.min_x,
+                result.lot.max_x,
+                result.lot.min_z,
+                result.lot.max_z,
             });
         }
 
-        if (!placed)
-            continue;
+        result.area = (result.lot.max_x - result.lot.min_x) * (result.lot.max_z - result.lot.min_z);
+        return result;
+    };
 
-        SemanticCityModuleLayout module_layout;
-        module_layout.module_path = candidate.module_path;
-        module_layout.offset = chosen_offset;
-        module_layout.min_x = chosen_lot.min_x;
-        module_layout.max_x = chosen_lot.max_x;
-        module_layout.min_z = chosen_lot.min_z;
-        module_layout.max_z = chosen_lot.max_z;
-        module_layout.quality = candidate.quality;
-        module_layout.health = candidate.health;
-        module_layout.park_center = candidate.layout.park_center + chosen_offset;
-        module_layout.park_footprint = candidate.layout.park_footprint;
-        module_layout.park_sidewalk_width = candidate.layout.park_sidewalk_width;
-        module_layout.park_road_width = candidate.layout.park_road_width;
-        module_layout.buildings.reserve(candidate.layout.buildings.size());
-        for (const SemanticCityBuilding& building : candidate.layout.buildings)
-        {
-            SemanticCityBuilding translated = building;
-            translated.center += chosen_offset;
-            module_layout.buildings.push_back(std::move(translated));
-        }
+    ComposedDistrict composed = compose_folder(root, 0, true);
+    megacity.modules.insert(
+        megacity.modules.end(),
+        std::make_move_iterator(composed.modules.begin()),
+        std::make_move_iterator(composed.modules.end()));
+    megacity.folders = std::move(composed.folders);
+    std::sort(megacity.folders.begin(), megacity.folders.end(), [](const auto& a, const auto& b) {
+        if (a.depth != b.depth)
+            return a.depth < b.depth;
+        return a.folder_path < b.folder_path;
+    });
 
-        module_grid.insert(chosen_lot);
-        megacity.modules.push_back(std::move(module_layout));
-        megacity.min_x = std::min(megacity.min_x, chosen_lot.min_x);
-        megacity.max_x = std::max(megacity.max_x, chosen_lot.max_x);
-        megacity.min_z = std::min(megacity.min_z, chosen_lot.min_z);
-        megacity.max_z = std::max(megacity.max_z, chosen_lot.max_z);
-    }
-
-    if (megacity.modules.empty())
+    if (composed.empty() && !has_central_park)
     {
         megacity.min_x = 0.0f;
         megacity.max_x = 0.0f;
         megacity.min_z = 0.0f;
         megacity.max_z = 0.0f;
+    }
+    else
+    {
+        megacity.min_x = composed.lot.min_x;
+        megacity.max_x = composed.lot.max_x;
+        megacity.min_z = composed.lot.min_z;
+        megacity.max_z = composed.lot.max_z;
+        if (has_central_park)
+        {
+            megacity.min_x = std::min(megacity.min_x, central_park_lot.min_x);
+            megacity.max_x = std::max(megacity.max_x, central_park_lot.max_x);
+            megacity.min_z = std::min(megacity.min_z, central_park_lot.min_z);
+            megacity.max_z = std::max(megacity.max_z, central_park_lot.max_z);
+        }
     }
 
     return megacity;
