@@ -342,9 +342,9 @@ TEST_CASE("megacity host forwards text input into its ImGui context", "[megacity
     };
 
     REQUIRE(host.initialize(context, callbacks));
-    REQUIRE(host.imgui_context_ != nullptr);
+    REQUIRE(host.imgui_.context() != nullptr);
 
-    ImGui::SetCurrentContext(host.imgui_context_);
+    ImGui::SetCurrentContext(host.imgui_.context());
     ImGuiIO& io = ImGui::GetIO();
     ImGuiContext& g = *ImGui::GetCurrentContext();
     const int before_count = g.InputEventsQueue.Size;

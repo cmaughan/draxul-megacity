@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <draxul/plugin_imgui_context.h>
 #include <draxul/plugin_runtime.h>
 #include <draxul/megacity_code_config.h>
 #include <filesystem>
@@ -152,9 +153,7 @@ private:
     float city_max_z_ = 2.5f;
     bool show_ui_panels_ = true;
     int imgui_settle_frames_ = 0;
-    std::string imgui_ini_path_;
-    ImGuiContext* imgui_context_ = nullptr;
-    IImGuiHost* imgui_backend_ = nullptr;
+    plugin_support::PluginImGuiContext imgui_;
     bool continuous_refresh_enabled_ = false;
     std::string selected_building_name_;
     std::string selected_building_module_path_;

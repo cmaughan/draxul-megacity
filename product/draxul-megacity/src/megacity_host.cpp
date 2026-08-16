@@ -25,6 +25,7 @@
 #include <draxul/code_semantic_model.h>
 #include <draxul/config_document.h>
 #include <draxul/imgui_host.h>
+#include <draxul/imgui_input_bridge.h>
 #include <draxul/log.h>
 #include <draxul/megacity_host.h>
 #include <draxul/perf_timing.h>
@@ -519,22 +520,12 @@ bool MegaCityHost::initialize(const PluginRuntimeContext& context, PluginRuntime
         const std::filesystem::path settings_root = context.storage_directory.empty()
             ? ConfigDocument::default_path().parent_path()
             : context.storage_directory;
-        std::filesystem::path ini_path = settings_root
+        const std::filesystem::path ini_path = settings_root
             / (is_biology_view(visualization_mode_) ? "bioview_imgui.ini" : "megacity_imgui.ini");
-        imgui_ini_path_ = ini_path.string();
 
-        imgui_context_ = ImGui::CreateContext();
-        ImGui::SetCurrentContext(imgui_context_);
-        ImGuiIO& mc_io = ImGui::GetIO();
-        mc_io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-        mc_io.ConfigFlags |= ImGuiConfigFlags_IsSRGB;
-        mc_io.ConfigWindowsResizeFromEdges = true;
-        mc_io.IniFilename = nullptr;
-        mc_io.LogFilename = nullptr;
-        ImGui::StyleColorsDark();
-
-        if (std::filesystem::exists(ini_path))
-            ImGui::LoadIniSettingsFromDisk(imgui_ini_path_.c_str());
+        plugin_support::PluginImGuiContext::Options imgui_options;
+        imgui_options.ini_path = ini_path.string();
+        imgui_.create(imgui_options);
     }
     sign_font_path_ = context.text_service
         ? context.text_service->primary_font_path() : std::string{};
@@ -921,7 +912,7 @@ void MegaCityHost::on_key(const KeyEvent& event)
 {
     PERF_MEASURE();
 
-    if (route_megacity_imgui_key(imgui_context_, event))
+    if (plugin_support::ImGuiInputBridge::route_key(imgui_.context(), event))
     {
         if (callbacks_)
             callbacks_->request_frame();
@@ -967,7 +958,7 @@ void MegaCityHost::on_key(const KeyEvent& event)
 void MegaCityHost::on_text_input(const TextInputEvent& event)
 {
     PERF_MEASURE();
-    if (route_megacity_imgui_text(imgui_context_, event) && callbacks_)
+    if (plugin_support::ImGuiInputBridge::route_text(imgui_.context(), event) && callbacks_)
         callbacks_->request_frame();
 }
 
@@ -975,7 +966,7 @@ void MegaCityHost::on_mouse_move(const MouseMoveEvent& event)
 {
     PERF_MEASURE();
 
-    if (route_megacity_imgui_mouse_move(imgui_context_, event))
+    if (plugin_support::ImGuiInputBridge::route_mouse_move(imgui_.context(), event))
     {
         if (callbacks_)
             callbacks_->request_frame();
@@ -1028,7 +1019,7 @@ void MegaCityHost::on_mouse_button(const MouseButtonEvent& event)
 {
     PERF_MEASURE();
 
-    if (route_megacity_imgui_mouse_button(imgui_context_, event))
+    if (plugin_support::ImGuiInputBridge::route_mouse_button(imgui_.context(), event))
     {
         if (callbacks_)
             callbacks_->request_frame();
@@ -1042,7 +1033,7 @@ void MegaCityHost::on_mouse_button(const MouseButtonEvent& event)
 
 void MegaCityHost::on_mouse_wheel(const MouseWheelEvent& event)
 {
-    route_megacity_imgui_mouse_wheel(imgui_context_, event);
+    plugin_support::ImGuiInputBridge::route_mouse_wheel(imgui_.context(), event);
 }
 
 void MegaCityHost::set_imgui_font(const std::string& path, float size_pixels)
@@ -1053,35 +1044,19 @@ void MegaCityHost::set_imgui_font(const std::string& path, float size_pixels)
         refresh_sign_text_service();
         mark_scene_dirty();
     }
-    if (!imgui_context_)
-        return;
-    ImGui::SetCurrentContext(imgui_context_);
-    ImGuiIO& io = ImGui::GetIO();
-    io.Fonts->Clear();
-    if (!path.empty() && size_pixels > 0.0f)
-        io.Fonts->AddFontFromFileTTF(path.c_str(), size_pixels);
-    if (io.Fonts->Fonts.empty())
-        io.Fonts->AddFontDefault();
-    if (imgui_backend_)
-        imgui_backend_->rebuild_imgui_font_texture();
+    imgui_.set_font(path, size_pixels);
 }
 
 void MegaCityHost::attach_imgui_host(IImGuiHost& host)
 {
-    imgui_backend_ = &host;
-    if (imgui_context_)
-    {
-        ImGui::SetCurrentContext(imgui_context_);
-        host.initialize_imgui_backend();
-        host.rebuild_imgui_font_texture();
-    }
+    imgui_.attach_host(host);
 }
 
 void MegaCityHost::render_host_imgui(float dt)
 {
     PERF_MEASURE();
     MegacityHostPanelFrame panel_frame(
-        imgui_context_, imgui_backend_, viewport_, pixel_w_, pixel_h_, dt, show_ui_panels_);
+        imgui_, viewport_, pixel_w_, pixel_h_, dt, show_ui_panels_);
     if (!panel_frame.active() || !panel_frame.panels_visible())
         return;
 
@@ -1218,18 +1193,9 @@ void MegaCityHost::shutdown()
     // Destroy pass-owned Vulkan debug textures while this ImGui backend is still alive.
     scene_pass_.reset();
 
-    // Tear down our own ImGui context.
-    if (imgui_context_)
-    {
-        ImGui::SetCurrentContext(imgui_context_);
-        if (!imgui_ini_path_.empty())
-            ImGui::SaveIniSettingsToDisk(imgui_ini_path_.c_str());
-        if (imgui_backend_)
-            imgui_backend_->shutdown_imgui_backend();
-        ImGui::DestroyContext(imgui_context_);
-        imgui_context_ = nullptr;
-        imgui_backend_ = nullptr;
-    }
+    // Tear down our own ImGui context (saves the docking ini, shuts the
+    // backend down, then destroys the context).
+    imgui_.destroy();
 
     pending_renderer_config_.show_ui_panels = show_ui_panels_;
     save_merged_megacity_config(config_document_, pending_renderer_config_, renderer_defaults_);
@@ -1882,8 +1848,8 @@ void MegaCityHost::draw(IFrameContext& frame)
     frame.record_render_pass(*scene_pass_, viewport);
 
     render_host_imgui(last_imgui_delta_seconds_);
-    if (imgui_context_ && imgui_backend_)
-        frame.render_imgui(ImGui::GetDrawData(), imgui_context_);
+    if (imgui_.active())
+        frame.render_imgui(ImGui::GetDrawData(), imgui_.context());
     frame.flush_submit_chunk();
 }
 

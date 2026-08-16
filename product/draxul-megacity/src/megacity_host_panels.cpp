@@ -3,102 +3,23 @@
 #include "ui_city_map_panel.h"
 
 #include <draxul/codeviz_scene_pass.h>
-#include <draxul/imgui_host.h>
-#include <draxul/sdl_imgui_input.h>
+#include <draxul/plugin_imgui_context.h>
 #include <imgui.h>
 
 namespace draxul
 {
 
-bool route_megacity_imgui_key(ImGuiContext* context, const KeyEvent& event)
-{
-    if (!context)
-        return false;
-    ImGui::SetCurrentContext(context);
-    ImGuiIO& io = ImGui::GetIO();
-    io.AddKeyEvent(ImGuiMod_Ctrl, (event.mod & kModCtrl) != 0);
-    io.AddKeyEvent(ImGuiMod_Shift, (event.mod & kModShift) != 0);
-    io.AddKeyEvent(ImGuiMod_Alt, (event.mod & kModAlt) != 0);
-    io.AddKeyEvent(ImGuiMod_Super, (event.mod & kModSuper) != 0);
-    const ImGuiKey key = sdl_scancode_to_imgui_key(event.scancode);
-    if (key != ImGuiKey_None)
-        io.AddKeyEvent(key, event.pressed);
-    return io.WantCaptureKeyboard;
-}
-
-bool route_megacity_imgui_text(ImGuiContext* context, const TextInputEvent& event)
-{
-    if (!context || event.text.empty())
-        return false;
-    ImGui::SetCurrentContext(context);
-    ImGuiIO& io = ImGui::GetIO();
-    io.AddInputCharactersUTF8(event.text.c_str());
-    return io.WantTextInput || io.WantCaptureKeyboard;
-}
-
-bool route_megacity_imgui_mouse_move(ImGuiContext* context, const MouseMoveEvent& event)
-{
-    if (!context)
-        return false;
-    ImGui::SetCurrentContext(context);
-    ImGuiIO& io = ImGui::GetIO();
-    io.AddMousePosEvent(static_cast<float>(event.pos.x), static_cast<float>(event.pos.y));
-    return io.WantCaptureMouse;
-}
-
-bool route_megacity_imgui_mouse_button(ImGuiContext* context, const MouseButtonEvent& event)
-{
-    if (!context)
-        return false;
-    ImGui::SetCurrentContext(context);
-    int button = -1;
-    switch (event.button)
-    {
-    case 1:
-        button = 0;
-        break;
-    case 2:
-        button = 2;
-        break;
-    case 3:
-        button = 1;
-        break;
-    default:
-        break;
-    }
-    if (button >= 0)
-        ImGui::GetIO().AddMouseButtonEvent(button, event.pressed);
-    return ImGui::GetIO().WantCaptureMouse;
-}
-
-void route_megacity_imgui_mouse_wheel(ImGuiContext* context, const MouseWheelEvent& event)
-{
-    if (!context)
-        return;
-    ImGui::SetCurrentContext(context);
-    ImGui::GetIO().AddMouseWheelEvent(event.delta.x, event.delta.y);
-}
-
 MegacityHostPanelFrame::MegacityHostPanelFrame(
-    ImGuiContext* context,
-    IImGuiHost* backend,
+    plugin_support::PluginImGuiContext& imgui,
     const PluginRuntimeViewport& viewport,
     int pixel_w,
     int pixel_h,
     float dt,
     bool show_panels)
 {
-    if (!context || !backend)
+    if (!imgui.begin_frame(
+            viewport.pixel_pos.x, viewport.pixel_pos.y, pixel_w, pixel_h, dt))
         return;
-
-    ImGui::SetCurrentContext(context);
-    backend->begin_imgui_frame();
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(
-        static_cast<float>(viewport.pixel_pos.x + pixel_w),
-        static_cast<float>(viewport.pixel_pos.y + pixel_h));
-    io.DeltaTime = dt > 0.0f ? dt : (1.0f / 60.0f);
-    ImGui::NewFrame();
 
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking
         | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse

@@ -4,20 +4,19 @@
 #include <draxul/plugin_runtime.h>
 #include <memory>
 
-struct ImGuiContext;
-
 namespace draxul
 {
 
+namespace plugin_support
+{
+class PluginImGuiContext;
+}
+
 class CodeVizScenePass;
-class IImGuiHost;
 struct CityGrid;
 
-bool route_megacity_imgui_key(ImGuiContext* context, const KeyEvent& event);
-bool route_megacity_imgui_text(ImGuiContext* context, const TextInputEvent& event);
-bool route_megacity_imgui_mouse_move(ImGuiContext* context, const MouseMoveEvent& event);
-bool route_megacity_imgui_mouse_button(ImGuiContext* context, const MouseButtonEvent& event);
-void route_megacity_imgui_mouse_wheel(ImGuiContext* context, const MouseWheelEvent& event);
+// Input routing goes through the shared plugin_support::ImGuiInputBridge; this
+// file owns only the frame/dockspace setup and the fixed debug/map panels.
 
 // Owns ImGui frame/dockspace setup and the module's fixed debug/map panels.
 // The host retains only application-specific control result handling.
@@ -25,8 +24,7 @@ class MegacityHostPanelFrame
 {
 public:
     MegacityHostPanelFrame(
-        ImGuiContext* context,
-        IImGuiHost* backend,
+        plugin_support::PluginImGuiContext& imgui,
         const PluginRuntimeViewport& viewport,
         int pixel_w,
         int pixel_h,
