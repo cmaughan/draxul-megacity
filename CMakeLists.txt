@@ -21,6 +21,7 @@ add_library(draxul-megacity-plugin MODULE src/megacity_plugin.cpp)
 target_include_directories(draxul-megacity-plugin PRIVATE src)
 target_link_libraries(draxul-megacity-plugin PRIVATE
     Draxul::PluginSDK
+    Draxul::PluginSupport::Adapter
     Draxul::PluginSupport::ImGui
     Draxul::PluginSupport::Runtime
     draxul-megacity
@@ -34,6 +35,7 @@ if(APPLE)
         "LINKER:-undefined,dynamic_lookup")
 else()
     target_link_libraries(draxul-megacity-plugin PRIVATE
+        Draxul::PluginSupport::VulkanResources
         Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
 endif()
 set_target_properties(draxul-megacity-plugin PROPERTIES

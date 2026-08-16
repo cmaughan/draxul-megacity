@@ -1,3 +1,4 @@
+#include <draxul/plugin_adapter.h>
 #include <draxul/plugin_api.h>
 #include <draxul/plugin_gpu_imgui.h>
 #include <draxul/plugin_host_services.h>
@@ -9,10 +10,9 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 #include <filesystem>
-#include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -20,6 +20,7 @@
 #include <draxul/metal/metal_render_context.h>
 #import <Metal/Metal.h>
 #else
+#include <draxul/vulkan/vk_plugin_allocator.h>
 #include <draxul/vulkan/vk_render_context.h>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
@@ -27,6 +28,9 @@
 
 namespace
 {
+
+using draxul::plugin_support::render_result;
+using draxul::plugin_support::tick_result;
 
 constexpr const char* kPluginId = "dev.draxul.megacity";
 
@@ -73,6 +77,7 @@ public:
 struct Instance
 {
     const DraxulPluginHostApiV2* api = nullptr;
+    std::optional<draxul::plugin_support::HostServices> services;
     DraxulPluginViewportV2 viewport{};
     draxul::MegaCityVisualizationMode mode = draxul::MegaCityVisualizationMode::City;
     bool visible = true;
@@ -88,34 +93,10 @@ struct Instance
 #endif
 };
 
-DraxulPluginRenderResultV2 render_result(bool ok,
-    const char* error = nullptr)
-{
-    return { sizeof(DraxulPluginRenderResultV2),
-        DRAXUL_PLUGIN_NO_DEADLINE, ok ? 1 : 0, error };
-}
-
-DraxulPluginTickResultV2 tick_result(bool ok, uint64_t delay,
-    bool redraw = false, const char* error = nullptr)
-{
-    return { sizeof(DraxulPluginTickResultV2), delay,
-        redraw ? 1 : 0, ok ? 1 : 0, error };
-}
-
-void notify(Instance* instance)
-{
-    if (instance && instance->api
-        && instance->api->notify_presentation_changed)
-        instance->api->notify_presentation_changed(instance->api->host_context);
-}
-
 void synchronize_ui_style(Instance& instance)
 {
-    if (instance.host)
-    {
-        if (const auto font = instance.ui_style.poll())
-            instance.host->set_imgui_font(font->path, font->size_pixels);
-    }
+    draxul::plugin_support::synchronize_ui_style(
+        instance.ui_style, instance.host.get());
 }
 
 void* create_instance(const DraxulPluginCreateInfoV2* info)
@@ -131,16 +112,15 @@ void* create_instance(const DraxulPluginCreateInfoV2* info)
     std::string source;
     bool continuous_refresh = false;
     bool show_ui = true;
+    const auto config = draxul::plugin_support::parse_config_json(*info);
+    if (!config)
+        return nullptr;
     try
     {
-        const char* begin = info->config_json ? info->config_json : "{}";
-        const char* end = info->config_json
-            ? info->config_json + info->config_json_length : begin + 2;
-        const auto config = nlohmann::json::parse(begin, end);
-        mode = config.value("mode", mode);
-        source = config.value("source", source);
-        continuous_refresh = config.value("continuous_refresh", false);
-        show_ui = config.value("show_ui", true);
+        mode = config->value("mode", mode);
+        source = config->value("source", source);
+        continuous_refresh = config->value("continuous_refresh", false);
+        show_ui = config->value("show_ui", true);
     }
     catch (...)
     {
@@ -155,6 +135,7 @@ void* create_instance(const DraxulPluginCreateInfoV2* info)
         ? std::filesystem::u8path(info->plugin_directory_utf8)
         : std::filesystem::path{};
     draxul::set_codeviz_product_root(directory);
+    instance->services.emplace(*info);
     instance->ui_style.discover(*info->host);
     instance->imgui = draxul::plugin_support::create_gpu_imgui_host();
     instance->host = std::make_unique<draxul::MegaCityHost>(instance->mode);
@@ -168,8 +149,8 @@ void* create_instance(const DraxulPluginCreateInfoV2* info)
     context.initial_viewport.pixel_size = {
         info->initial_viewport.width, info->initial_viewport.height };
     context.initial_viewport.pixel_scale = info->initial_viewport.pixel_scale;
-    draxul::plugin_support::HostServices services(*info);
-    context.storage_directory = services.path(DRAXUL_PLUGIN_PATH_DATA);
+    context.storage_directory
+        = instance->services->path(DRAXUL_PLUGIN_PATH_DATA);
     context.display_ppi = info->initial_viewport.display_ppi;
     if (!instance->host->initialize(context, instance->callbacks))
         return nullptr;
@@ -200,8 +181,7 @@ void destroy_instance(void* opaque)
     if (instance->host)
         instance->host->shutdown();
 #if !defined(__APPLE__)
-    if (instance->allocator)
-        vmaDestroyAllocator(instance->allocator);
+    draxul::plugin_support::destroy_allocator(instance->allocator);
 #endif
     delete instance;
 }
@@ -226,9 +206,9 @@ void set_visible(void* opaque, int32_t visible)
         return;
     instance->visible = visible != 0;
     instance->host->set_presentation_visible(instance->visible);
-    if (instance->visible && instance->api->request_redraw)
-        instance->api->request_redraw(instance->api->host_context);
-    notify(instance);
+    if (instance->visible)
+        instance->services->request_redraw();
+    instance->services->notify_presentation_changed();
 }
 
 void set_focused(void* opaque, int32_t focused)
@@ -241,7 +221,7 @@ void set_focused(void* opaque, int32_t focused)
         instance->host->on_focus_gained();
     else
         instance->host->on_focus_lost();
-    notify(instance);
+    instance->services->notify_presentation_changed();
 }
 
 int32_t handle_input(void* opaque, const DraxulPluginInputEventV2* event)
@@ -315,25 +295,6 @@ DraxulPluginTickResultV2 tick(void* opaque,
         std::chrono::duration_cast<std::chrono::nanoseconds>(delay).count()), true);
 }
 
-#if !defined(__APPLE__)
-bool ensure_allocator(Instance& instance,
-    const DraxulPluginVulkanFrameV2& frame)
-{
-    if (instance.allocator)
-        return true;
-    VmaVulkanFunctions functions{};
-    functions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
-    functions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
-    VmaAllocatorCreateInfo info{};
-    info.instance = static_cast<VkInstance>(frame.instance);
-    info.physicalDevice = static_cast<VkPhysicalDevice>(frame.physical_device);
-    info.device = static_cast<VkDevice>(frame.device);
-    info.pVulkanFunctions = &functions;
-    info.vulkanApiVersion = VK_API_VERSION_1_2;
-    return vmaCreateAllocator(&info, &instance.allocator) == VK_SUCCESS;
-}
-#endif
-
 DraxulPluginRenderResultV2 render_vulkan(void* opaque,
     const DraxulPluginVulkanFrameV2* frame)
 {
@@ -350,8 +311,11 @@ DraxulPluginRenderResultV2 render_vulkan(void* opaque,
     instance->host->draw(captured);
     if (!captured.pass_)
         return render_result(false, "MegaCity did not provide a scene pass");
-    if (!ensure_allocator(*instance, *frame))
-        return render_result(false, "MegaCity could not create its Vulkan allocator");
+    static thread_local std::string allocator_error;
+    allocator_error.clear();
+    if (!draxul::plugin_support::ensure_allocator(instance->allocator,
+            *frame, "MegaCity", allocator_error))
+        return render_result(false, allocator_error.c_str());
     const auto command_buffer = static_cast<VkCommandBuffer>(frame->command_buffer);
     const auto render_pass = reinterpret_cast<VkRenderPass>(
         static_cast<uintptr_t>(frame->continuation_render_pass));
@@ -463,48 +427,29 @@ int32_t dispatch_action(void* opaque, const char* action, size_t length)
         && instance->host->dispatch_action(std::string_view(action, length));
 }
 
-constexpr std::string_view kActionIds[] = { "toggle_ui_panels" };
-constexpr std::string_view kActionNames[] = { "Toggle Control Panels" };
+constexpr draxul::plugin_support::AdapterAction kActions[] = {
+    { "toggle_ui_panels", "Toggle Control Panels" },
+};
 
-size_t action_count(void*) { return std::size(kActionIds); }
+using Presentation = draxul::plugin_support::PresentationAdapter<kActions,
+    &get_state, &dispatch_action>;
 
-int32_t action_at(void*, size_t index, DraxulPluginStringViewV2* id,
-    DraxulPluginStringViewV2* name)
-{
-    if (!id || !name || index >= std::size(kActionIds))
-        return 0;
-    *id = { kActionIds[index].data(), kActionIds[index].size() };
-    *name = { kActionNames[index].data(), kActionNames[index].size() };
-    return 1;
-}
-
-int32_t query_extension(void*, const char* id, size_t length,
-    uint32_t version, void* table, size_t table_size)
-{
-    if (!id || !table || std::string_view(id, length)
-            != DRAXUL_PLUGIN_PRESENTATION_EXTENSION_ID
-        || version != DRAXUL_PLUGIN_PRESENTATION_EXTENSION_VERSION
-        || table_size < sizeof(DraxulPluginPresentationExtensionV2))
-        return 0;
-    *static_cast<DraxulPluginPresentationExtensionV2*>(table) = {
-        sizeof(DraxulPluginPresentationExtensionV2),
-        DRAXUL_PLUGIN_PRESENTATION_EXTENSION_VERSION,
-        &get_state, &dispatch_action, &action_count, &action_at };
-    return 1;
-}
-
-#if defined(__APPLE__)
-constexpr uint32_t kBackends = DRAXUL_PLUGIN_BACKEND_METAL;
-#else
-constexpr uint32_t kBackends = DRAXUL_PLUGIN_BACKEND_VULKAN;
-#endif
-
-const DraxulPluginApiV2 kApi = {
-    sizeof(DraxulPluginApiV2), DRAXUL_PLUGIN_ABI_VERSION,
-    kPluginId, "MegaCity / BioView", "0.1.0", kBackends,
-    &create_instance, &quiesce_instance, &destroy_instance,
-    &set_viewport, &set_visible, &set_focused, &handle_input,
-    &tick, &render_vulkan, &render_metal, &query_extension };
+const DraxulPluginApiV2 kApi = draxul::plugin_support::make_plugin_api(
+    { kPluginId, "MegaCity / BioView", "0.1.0",
+        draxul::plugin_support::kNativeBackendMask },
+    {
+        .create_instance = &create_instance,
+        .quiesce_instance = &quiesce_instance,
+        .destroy_instance = &destroy_instance,
+        .set_viewport = &set_viewport,
+        .set_visible = &set_visible,
+        .set_focused = &set_focused,
+        .handle_input = &handle_input,
+        .tick = &tick,
+        .render_vulkan = &render_vulkan,
+        .render_metal = &render_metal,
+        .query_extension = &Presentation::query_extension,
+    });
 
 } // namespace
 
