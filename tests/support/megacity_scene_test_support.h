@@ -5,6 +5,7 @@
 #ifdef DRAXUL_ENABLE_MEGACITY
 
 #include "biology_builder.h"
+#include "codebase_snapshot_wait.h"
 #include "city_builder.h"
 #include "city_helpers.h"
 #include "city_materials.h"
@@ -97,40 +98,12 @@ void pump_until_idle(MegaCityHost& host, int max_steps = 64)
     }
 }
 
-std::string read_text_file(const std::filesystem::path& path)
-{
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
-        return {};
-    return std::string(std::istreambuf_iterator<char>(in), {});
-}
-
-std::shared_ptr<const CodebaseSnapshot> wait_for_complete_snapshot(
-    CodebaseScanner& scanner,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(2000))
-{
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        if (const auto snapshot = scanner.snapshot(); snapshot && snapshot->complete)
-            return snapshot;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return scanner.snapshot();
-}
-
 std::shared_ptr<const CodebaseSnapshot> wait_for_complete_snapshot(
     SemanticSourceController& source,
     std::chrono::milliseconds timeout = std::chrono::milliseconds(2000))
 {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        if (const auto snapshot = source.scanner_snapshot(); snapshot && snapshot->complete)
-            return snapshot;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return source.scanner_snapshot();
+    return wait_for_complete_snapshot_from(
+        [&source] { return source.scanner_snapshot(); }, timeout);
 }
 
 struct ShutdownOrderImGuiHost : IImGuiHost
@@ -266,20 +239,14 @@ RoofSignSemanticFixture make_roof_sign_semantic_fixture()
     };
 }
 
-std::filesystem::path bundled_font_path()
-{
-    return std::filesystem::path(DRAXUL_PROJECT_ROOT) / "fonts" / "JetBrainsMonoNerdFont-Regular.ttf";
-}
-
+// Font/TextService bootstrap comes from the shared core test support; this
+// wrapper only keeps the skip-when-font-missing contract these suites use.
 bool init_text_service(TextService& text_service)
 {
-    const std::filesystem::path font_path = bundled_font_path();
-    if (!std::filesystem::exists(font_path))
+    if (!std::filesystem::exists(draxul::tests::bundled_font_path()))
         return false;
-
-    TextServiceConfig config;
-    config.font_path = font_path.string();
-    return text_service.initialize(config, TextService::DEFAULT_POINT_SIZE, 96.0f);
+    draxul::tests::init_text_service(text_service);
+    return true;
 }
 
 } // namespace

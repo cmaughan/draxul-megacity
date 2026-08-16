@@ -5,6 +5,8 @@
 #include "city_builder.h"
 
 #include <draxul/code_semantic_model.h>
+#include "support/codebase_snapshot_wait.h"
+
 #include <draxul/treesitter.h>
 
 #include <algorithm>
@@ -64,20 +66,6 @@ CodebaseSnapshot make_semantic_fixture_snapshot()
     file.symbols = { iface, concrete, method, free_function };
     snapshot.files.push_back(std::move(file));
     return snapshot;
-}
-
-std::shared_ptr<const CodebaseSnapshot> wait_for_complete_snapshot(
-    CodebaseScanner& scanner,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(2000))
-{
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        if (const auto snapshot = scanner.snapshot(); snapshot && snapshot->complete)
-            return snapshot;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return scanner.snapshot();
 }
 
 std::vector<std::string> semantic_module_paths(const CodeSemanticSnapshot& semantics)

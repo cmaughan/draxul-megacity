@@ -972,7 +972,7 @@ TEST_CASE("megacity host preserves externally edited core config when saving meg
 
     host.shutdown();
 
-    const std::string saved = read_text_file(redir.config_path);
+    const std::string saved = draxul::tests::read_file(redir.config_path);
     // TOML serializes 0.6 with full double precision (0.59999999999999998).
     // Verify the value was preserved from the externally-edited file (not
     // reverted to the original 0.9) by parsing the saved config.

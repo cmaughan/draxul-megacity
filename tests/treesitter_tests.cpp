@@ -2,6 +2,8 @@
 
 #ifdef DRAXUL_ENABLE_MEGACITY
 
+#include "support/codebase_snapshot_wait.h"
+
 #include <draxul/treesitter.h>
 
 #include <algorithm>
@@ -17,20 +19,6 @@ namespace draxul
 
 namespace
 {
-
-std::shared_ptr<const CodebaseSnapshot> wait_for_complete_snapshot(
-    CodebaseScanner& scanner,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(2000))
-{
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        if (const auto snapshot = scanner.snapshot(); snapshot && snapshot->complete)
-            return snapshot;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return scanner.snapshot();
-}
 
 std::vector<std::string> collect_type_names(const ParsedFile& file)
 {
