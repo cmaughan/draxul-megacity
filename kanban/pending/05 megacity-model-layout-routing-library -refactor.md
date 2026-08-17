@@ -48,7 +48,7 @@ model/layout/grid/routing implementation files and direct deterministic tests.
 
 ## Agent documentation and tooling
 
-- [ ] Update `docs/module-map.md` and `modules/megacity/AGENTS.md` with the new direction.
+- [ ] Update the core `docs/module-map.md` and `plugins/megacity/product/AGENTS.md` with the new direction.
 - [ ] Document that model code is synchronous, deterministic, backend-neutral, and host-thread agnostic.
 - [ ] Update focused Megacity validation commands to current target/CTest label names.
 
@@ -62,7 +62,7 @@ model/layout/grid/routing implementation files and direct deterministic tests.
 
 ## Dependencies and ownership
 
-Depends on `kanban/pending/00 internal-target-build-policy -refactor.md`. One
-Megacity model owner freezes the public records/options and CMake target. Layout
+Depends on the core repository's internal-target build-policy work. One MegaCity
+model owner freezes the public records/options and CMake target. Layout
 and routing TU/test moves may then proceed independently without touching
 renderer backends or host lifecycle code.
