@@ -41,6 +41,12 @@ endif()
 set_target_properties(draxul-megacity-plugin PROPERTIES
     PREFIX "" OUTPUT_NAME "draxul-megacity")
 
+# Shared GLSL/MSL includes owned by Draxul (currently the ACES tone-map curve,
+# which MegaCity and SatView used to carry a hand-synced copy of each). Listing
+# them in DEPENDS is what makes a shared-include edit rebuild these shaders --
+# the include-dependency tracking MegaCity's loop previously lacked entirely.
+draxul_shared_shader_includes(MEGACITY_SHARED_SHADER_INCLUDE_DIR MEGACITY_SHARED_SHADER_INCLUDES)
+
 if(APPLE)
     set(MEGACITY_PLUGIN_METAL_NAMES
         megacity_scene megacity_gbuffer megacity_ao megacity_tooltip)
@@ -54,10 +60,11 @@ if(APPLE)
             "${CMAKE_CURRENT_BINARY_DIR}/${MEGACITY_METAL_NAME}.metallib")
         add_custom_command(OUTPUT "${MEGACITY_METAL_LIB}"
             COMMAND xcrun -sdk macosx metal -c "${MEGACITY_METAL_SOURCE}"
+                -I "${MEGACITY_SHARED_SHADER_INCLUDE_DIR}"
                 -o "${MEGACITY_METAL_AIR}"
             COMMAND xcrun -sdk macosx metallib "${MEGACITY_METAL_AIR}"
                 -o "${MEGACITY_METAL_LIB}"
-            DEPENDS "${MEGACITY_METAL_SOURCE}"
+            DEPENDS "${MEGACITY_METAL_SOURCE}" ${MEGACITY_SHARED_SHADER_INCLUDES}
             VERBATIM)
         list(APPEND MEGACITY_PLUGIN_METALLIBS "${MEGACITY_METAL_LIB}")
     endforeach()
@@ -68,6 +75,8 @@ else()
     file(GLOB MEGACITY_GLSL_SOURCES CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.vert"
         "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.frag")
+    file(GLOB MEGACITY_GLSL_INCLUDES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.glsl")
     set(MEGACITY_PLUGIN_SHADER_OUTPUTS)
     foreach(MEGACITY_SHADER IN LISTS MEGACITY_GLSL_SOURCES)
         get_filename_component(MEGACITY_SHADER_NAME "${MEGACITY_SHADER}" NAME)
@@ -76,8 +85,10 @@ else()
         add_custom_command(OUTPUT "${MEGACITY_SHADER_OUTPUT}"
             COMMAND ${Vulkan_GLSLC_EXECUTABLE}
                 -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+                -I "${MEGACITY_SHARED_SHADER_INCLUDE_DIR}"
                 "${MEGACITY_SHADER}" -o "${MEGACITY_SHADER_OUTPUT}"
-            DEPENDS "${MEGACITY_SHADER}"
+            DEPENDS "${MEGACITY_SHADER}" ${MEGACITY_GLSL_INCLUDES}
+                ${MEGACITY_SHARED_SHADER_INCLUDES}
             VERBATIM)
         list(APPEND MEGACITY_PLUGIN_SHADER_OUTPUTS "${MEGACITY_SHADER_OUTPUT}")
     endforeach()

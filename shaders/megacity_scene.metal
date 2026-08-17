@@ -2,6 +2,8 @@
 
 using namespace metal;
 
+#include "tone_map_aces.metal"
+
 struct FrameUniforms
 {
     float4x4 view;
@@ -746,18 +748,6 @@ vertex FullscreenVertexOut fullscreen_vertex(uint vertex_id [[vertex_id]])
     out.position = float4(positions[vertex_id], 0.0f, 1.0f);
     out.uv = positions[vertex_id] * 0.5f + 0.5f;
     return out;
-}
-
-float3 tone_map_aces(float3 hdr, float exposure, float whitePoint)
-{
-    float3 color = max(hdr, float3(0.0f)) * max(exposure, 0.0f);
-    color /= max(whitePoint, 1e-3f);
-    constexpr float a = 2.51f;
-    constexpr float b = 0.03f;
-    constexpr float c = 2.43f;
-    constexpr float d = 0.59f;
-    constexpr float e = 0.14f;
-    return clamp((color * (a * color + b)) / (color * (c * color + d) + e), float3(0.0f), float3(1.0f));
 }
 
 fragment float4 scene_post_fragment(

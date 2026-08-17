@@ -1206,8 +1206,11 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
     // Upload frame uniforms (same as main pass)
     FrameUniforms frame;
     frame.view = to_simd_matrix(scene_.camera.view);
-    frame.proj = to_simd_matrix(scene_.camera.proj);
-    frame.inv_view_proj = to_simd_matrix(scene_.camera.inv_view_proj);
+    // Same helper as the Vulkan backend, with Metal's Y-up convention: the
+    // projection and its inverse can no longer be sourced independently.
+    const CodeVizClipMatrices clip = build_clip_matrices(scene_.camera, ClipConvention::YUp);
+    frame.proj = to_simd_matrix(clip.proj);
+    frame.inv_view_proj = to_simd_matrix(clip.inv_view_proj);
     frame.camera_pos = simd_make_float4(
         scene_.camera.camera_pos.x, scene_.camera.camera_pos.y,
         scene_.camera.camera_pos.z, scene_.camera.camera_pos.w);

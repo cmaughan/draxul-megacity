@@ -2,6 +2,8 @@
 
 #include "codeviz_material_library.h"
 #include "codeviz_vk_resources.h"
+
+#include <draxul/vulkan/vk_hdr_scene_pipeline.h>
 #include "mesh_library.h"
 #include "shadow_cascade.h"
 #include <algorithm>
@@ -212,8 +214,9 @@ float compute_ao_radius_pixels(float zoom_half_height, float radius_world, int v
 
 glm::mat4 make_vulkan_projection(glm::mat4 proj)
 {
-    proj[1][1] *= -1.0f;
-    return proj;
+    // One definition of the flip, shared with the Metal backend through
+    // codeviz_scene_types.h's ClipConvention.
+    return apply_clip_convention(proj, ClipConvention::YDown);
 }
 
 glm::mat4 make_vulkan_shadow_texture_matrix(const glm::mat4& world_to_clip)
@@ -288,6 +291,9 @@ struct CodeVizScenePass::State
     VkRenderPass ao_render_pass = VK_NULL_HANDLE;
     VkPipeline ao_pipeline = VK_NULL_HANDLE;
     VkPipeline ao_blur_pipeline = VK_NULL_HANDLE;
+    // Owns the MSAA scene pass and the tone-map pass; the two handles below are
+    // plain mirrors so the draw recording is unchanged.
+    vkresources::HdrScenePipeline hdr_pipeline;
     VkRenderPass scene_render_pass = VK_NULL_HANDLE;
     VkRenderPass scene_post_render_pass = VK_NULL_HANDLE;
     VkSampler gbuffer_sampler = VK_NULL_HANDLE;
@@ -1355,88 +1361,19 @@ struct CodeVizScenePass::State
             return false;
         }
 
-        VkPipelineShaderStageCreateInfo present_stages[2] = {};
-        present_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        present_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-        present_stages[0].module = present_vert;
-        present_stages[0].pName = "main";
-        present_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        present_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        present_stages[1].module = present_frag;
-        present_stages[1].pName = "main";
-
-        VkPipelineVertexInputStateCreateInfo present_vertex_input = {
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-        };
-        VkPipelineInputAssemblyStateCreateInfo present_input_assembly = {
-            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
-        };
-        present_input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineViewportStateCreateInfo present_viewport_state = {
-            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO
-        };
-        present_viewport_state.viewportCount = 1;
-        present_viewport_state.scissorCount = 1;
-
-        VkPipelineRasterizationStateCreateInfo present_raster = {
-            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO
-        };
-        present_raster.polygonMode = VK_POLYGON_MODE_FILL;
-        present_raster.cullMode = VK_CULL_MODE_NONE;
-        present_raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        present_raster.lineWidth = 1.0f;
-
-        VkPipelineMultisampleStateCreateInfo present_multisample = {
-            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
-        };
-        present_multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        VkPipelineDepthStencilStateCreateInfo present_depth = {
-            VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO
-        };
-        present_depth.depthTestEnable = VK_FALSE;
-        present_depth.depthWriteEnable = VK_FALSE;
-        present_depth.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-
-        VkPipelineColorBlendAttachmentState present_blend_attachment = {};
-        present_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-            | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        VkPipelineColorBlendStateCreateInfo present_blend = {
-            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO
-        };
-        present_blend.attachmentCount = 1;
-        present_blend.pAttachments = &present_blend_attachment;
-
-        VkDynamicState present_dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-        VkPipelineDynamicStateCreateInfo present_dynamic = {
-            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO
-        };
-        present_dynamic.dynamicStateCount = 2;
-        present_dynamic.pDynamicStates = present_dynamic_states;
-
-        VkGraphicsPipelineCreateInfo present_ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-        present_ci.stageCount = 2;
-        present_ci.pStages = present_stages;
-        present_ci.pVertexInputState = &present_vertex_input;
-        present_ci.pInputAssemblyState = &present_input_assembly;
-        present_ci.pViewportState = &present_viewport_state;
-        present_ci.pRasterizationState = &present_raster;
-        present_ci.pMultisampleState = &present_multisample;
-        present_ci.pDepthStencilState = &present_depth;
-        present_ci.pColorBlendState = &present_blend;
-        present_ci.pDynamicState = &present_dynamic;
-        present_ci.layout = post_pipeline_layout;
-        present_ci.renderPass = render_pass;
-        present_ci.subpass = 0;
-
-        const VkResult present_result = vkCreateGraphicsPipelines(
-            device, VK_NULL_HANDLE, 1, &present_ci, nullptr, &present_pipeline);
+        // Present is the same fullscreen-triangle state as tone map, into the
+        // host's main render pass.
+        std::string present_error;
+        const bool present_ok = vkresources::create_fullscreen_pipeline(device,
+            vkresources::FullscreenPipelineRequest(present_vert, present_frag,
+                post_pipeline_layout, render_pass),
+            present_pipeline, present_error);
         vkDestroyShaderModule(device, present_vert, nullptr);
         vkDestroyShaderModule(device, present_frag, nullptr);
-        if (present_result != VK_SUCCESS)
+        if (!present_ok)
         {
-            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create present pipeline");
+            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create present pipeline: %s",
+                present_error.c_str());
             return false;
         }
 
@@ -1584,11 +1521,17 @@ struct CodeVizScenePass::State
         tooltip_blend.attachmentCount = 1;
         tooltip_blend.pAttachments = &tooltip_blend_att;
 
+        // The tooltip pipeline used to borrow the present pipeline's local
+        // dynamic-state array; the present pipeline is built by the shared
+        // fullscreen helper now, so the tooltip declares its own.
+        const VkDynamicState tooltip_dynamic_states[] = {
+            VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR
+        };
         VkPipelineDynamicStateCreateInfo tooltip_dyn = {
             VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO
         };
         tooltip_dyn.dynamicStateCount = 2;
-        tooltip_dyn.pDynamicStates = present_dynamic_states;
+        tooltip_dyn.pDynamicStates = tooltip_dynamic_states;
 
         VkGraphicsPipelineCreateInfo tooltip_ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
         tooltip_ci.stageCount = 2;
@@ -1823,82 +1766,21 @@ struct CodeVizScenePass::State
             return false;
         }
 
-        VkPipelineShaderStageCreateInfo post_stages[2] = {};
-        post_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        post_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-        post_stages[0].module = post_vert;
-        post_stages[0].pName = "main";
-        post_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        post_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        post_stages[1].module = post_frag;
-        post_stages[1].pName = "main";
-
-        VkPipelineVertexInputStateCreateInfo post_vertex_input = {
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-        };
-        VkPipelineInputAssemblyStateCreateInfo post_input_assembly = {
-            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
-        };
-        post_input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineViewportStateCreateInfo post_viewport_state = {
-            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO
-        };
-        post_viewport_state.viewportCount = 1;
-        post_viewport_state.scissorCount = 1;
-
-        VkPipelineRasterizationStateCreateInfo post_raster = {
-            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO
-        };
-        post_raster.polygonMode = VK_POLYGON_MODE_FILL;
-        post_raster.cullMode = VK_CULL_MODE_NONE;
-        post_raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        post_raster.lineWidth = 1.0f;
-
-        VkPipelineMultisampleStateCreateInfo post_multisample = {
-            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
-        };
-        post_multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        VkPipelineColorBlendAttachmentState post_blend_attachment = {};
-        post_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-            | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        VkPipelineColorBlendStateCreateInfo post_blend = {
-            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO
-        };
-        post_blend.attachmentCount = 1;
-        post_blend.pAttachments = &post_blend_attachment;
-
-        VkPipelineDynamicStateCreateInfo post_dynamic = {
-            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO
-        };
-        post_dynamic.dynamicStateCount = 2;
-        post_dynamic.pDynamicStates = dynamic_states;
-
-        VkGraphicsPipelineCreateInfo post_pipeline_ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-        post_pipeline_ci.stageCount = 2;
-        post_pipeline_ci.pStages = post_stages;
-        post_pipeline_ci.pVertexInputState = &post_vertex_input;
-        post_pipeline_ci.pInputAssemblyState = &post_input_assembly;
-        post_pipeline_ci.pViewportState = &post_viewport_state;
-        post_pipeline_ci.pRasterizationState = &post_raster;
-        post_pipeline_ci.pMultisampleState = &post_multisample;
-        post_pipeline_ci.pColorBlendState = &post_blend;
-        post_pipeline_ci.pDynamicState = &post_dynamic;
-        post_pipeline_ci.layout = post_pipeline_layout;
-        post_pipeline_ci.renderPass = scene_post_render_pass;
-        post_pipeline_ci.subpass = 0;
-        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &post_pipeline_ci, nullptr, &post_pipeline)
-            != VK_SUCCESS)
-        {
-            vkDestroyShaderModule(device, post_vert, nullptr);
-            vkDestroyShaderModule(device, post_frag, nullptr);
-            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create post pipeline");
-            return false;
-        }
-
+        // Tone map: the same fullscreen-triangle state vector SatView uses, so
+        // the shared helper builds it.
+        std::string post_error;
+        const bool post_ok = vkresources::create_fullscreen_pipeline(device,
+            vkresources::FullscreenPipelineRequest(post_vert, post_frag, post_pipeline_layout,
+                scene_post_render_pass),
+            post_pipeline, post_error);
         vkDestroyShaderModule(device, post_vert, nullptr);
         vkDestroyShaderModule(device, post_frag, nullptr);
+        if (!post_ok)
+        {
+            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create post pipeline: %s",
+                post_error.c_str());
+            return false;
+        }
 
         // Create debug pipeline (same layout, same vertex shader, different fragment shader)
         auto debug_frag = load_shader(device, (shader_dir / "megacity_debug.frag.spv").string());
@@ -2078,7 +1960,9 @@ struct CodeVizScenePass::State
             allocator = ctx.allocator();
             render_pass = VK_NULL_HANDLE;
             buffered_frame_count = frame_count;
-            scene_sample_count = choose_scene_sample_count(physical_device);
+            // The sample count now comes from the shared HDR pipeline, which
+            // probes real per-format support (bug #7) when create_pipeline()
+            // builds the passes below.
 
             if (!(create_device_resources(frame_count) && init_gbuffer() && create_pipeline()))
                 return false;
@@ -2259,10 +2143,7 @@ struct CodeVizScenePass::State
             vkDestroyPipeline(device, ao_blur_pipeline, nullptr);
         if (ao_render_pass != VK_NULL_HANDLE)
             vkDestroyRenderPass(device, ao_render_pass, nullptr);
-        if (scene_post_render_pass != VK_NULL_HANDLE)
-            vkDestroyRenderPass(device, scene_post_render_pass, nullptr);
-        if (scene_render_pass != VK_NULL_HANDLE)
-            vkDestroyRenderPass(device, scene_render_pass, nullptr);
+        hdr_pipeline.destroy(device);
         if (gbuffer_pipeline != VK_NULL_HANDLE)
             vkDestroyPipeline(device, gbuffer_pipeline, nullptr);
         if (gbuffer_render_pass != VK_NULL_HANDLE)
@@ -2786,174 +2667,35 @@ struct CodeVizScenePass::State
             return false;
         }
 
-        VkAttachmentDescription ao_attachment = {};
-        ao_attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
-        ao_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        ao_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        ao_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        ao_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        ao_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        ao_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        ao_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkAttachmentReference ao_color_ref = {};
-        ao_color_ref.attachment = 0;
-        ao_color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription ao_subpass = {};
-        ao_subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        ao_subpass.colorAttachmentCount = 1;
-        ao_subpass.pColorAttachments = &ao_color_ref;
-
-        VkSubpassDependency ao_deps[2] = {};
-        ao_deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-        ao_deps[0].dstSubpass = 0;
-        ao_deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        ao_deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        ao_deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        ao_deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-        ao_deps[1].srcSubpass = 0;
-        ao_deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-        ao_deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        ao_deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        ao_deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        ao_deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        VkRenderPassCreateInfo ao_rp_ci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        ao_rp_ci.attachmentCount = 1;
-        ao_rp_ci.pAttachments = &ao_attachment;
-        ao_rp_ci.subpassCount = 1;
-        ao_rp_ci.pSubpasses = &ao_subpass;
-        ao_rp_ci.dependencyCount = 2;
-        ao_rp_ci.pDependencies = ao_deps;
-        if (vkCreateRenderPass(device, &ao_rp_ci, nullptr, &ao_render_pass) != VK_SUCCESS)
+        // The AO buffer, the scene pass and the tone-map pass all come from the
+        // shared HDR scaffolding now: one set of subpass dependency masks for
+        // both products instead of the two that had drifted apart.
+        std::string hdr_error;
+        if (!vkresources::create_color_render_pass(device, VK_FORMAT_R8G8B8A8_UNORM,
+                VK_ATTACHMENT_LOAD_OP_DONT_CARE, ao_render_pass, hdr_error))
         {
-            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create AO render pass");
+            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create AO render pass: %s",
+                hdr_error.c_str());
             return false;
         }
 
-        VkAttachmentDescription scene_attachments[3] = {};
-        scene_attachments[0].format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        scene_attachments[0].samples = scene_sample_count;
-        scene_attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        scene_attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        scene_attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        scene_attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        scene_attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        scene_attachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        scene_attachments[1].format = VK_FORMAT_D32_SFLOAT;
-        scene_attachments[1].samples = scene_sample_count;
-        scene_attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        scene_attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        scene_attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        scene_attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        scene_attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        scene_attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-        scene_attachments[2].format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        scene_attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
-        scene_attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        scene_attachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        scene_attachments[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        scene_attachments[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        scene_attachments[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        scene_attachments[2].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkAttachmentReference scene_color_ref = {};
-        scene_color_ref.attachment = 0;
-        scene_color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        VkAttachmentReference scene_depth_ref = {};
-        scene_depth_ref.attachment = 1;
-        scene_depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        VkAttachmentReference scene_resolve_ref = {};
-        scene_resolve_ref.attachment = 2;
-        scene_resolve_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription scene_subpass = {};
-        scene_subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        scene_subpass.colorAttachmentCount = 1;
-        scene_subpass.pColorAttachments = &scene_color_ref;
-        scene_subpass.pDepthStencilAttachment = &scene_depth_ref;
-        scene_subpass.pResolveAttachments = &scene_resolve_ref;
-
-        VkSubpassDependency scene_deps[2] = {};
-        scene_deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-        scene_deps[0].dstSubpass = 0;
-        scene_deps[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-        scene_deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-            | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        scene_deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-            | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-        scene_deps[1].srcSubpass = 0;
-        scene_deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-        scene_deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-            | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        scene_deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        scene_deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        scene_deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        VkRenderPassCreateInfo scene_rp_ci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        scene_rp_ci.attachmentCount = 3;
-        scene_rp_ci.pAttachments = scene_attachments;
-        scene_rp_ci.subpassCount = 1;
-        scene_rp_ci.pSubpasses = &scene_subpass;
-        scene_rp_ci.dependencyCount = 2;
-        scene_rp_ci.pDependencies = scene_deps;
-        if (vkCreateRenderPass(device, &scene_rp_ci, nullptr, &scene_render_pass) != VK_SUCCESS)
+        vkresources::HdrScenePipelineConfig hdr_config;
+        hdr_config.color_format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        hdr_config.depth_format = VK_FORMAT_D32_SFLOAT;
+        hdr_config.tone_mapped_format = VK_FORMAT_B8G8R8A8_SRGB;
+        // A fullscreen tone-map triangle covers every pixel, so the target is
+        // never read before it is written; keep MegaCity's DONT_CARE.
+        hdr_config.tone_map_load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        hdr_config.want_msaa_preserving_pass = false;
+        hdr_config.debug_name = "MegaCity";
+        if (!hdr_pipeline.create(physical_device, device, hdr_config, hdr_error))
         {
-            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create scene render pass");
+            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: %s", hdr_error.c_str());
             return false;
         }
-
-        VkAttachmentDescription scene_post_attachment = {};
-        scene_post_attachment.format = VK_FORMAT_B8G8R8A8_SRGB;
-        scene_post_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        scene_post_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        scene_post_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        scene_post_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        scene_post_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        scene_post_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        scene_post_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkAttachmentReference scene_post_color_ref = {};
-        scene_post_color_ref.attachment = 0;
-        scene_post_color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription scene_post_subpass = {};
-        scene_post_subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        scene_post_subpass.colorAttachmentCount = 1;
-        scene_post_subpass.pColorAttachments = &scene_post_color_ref;
-
-        VkSubpassDependency scene_post_deps[2] = {};
-        scene_post_deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-        scene_post_deps[0].dstSubpass = 0;
-        scene_post_deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        scene_post_deps[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        scene_post_deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        scene_post_deps[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-        scene_post_deps[1].srcSubpass = 0;
-        scene_post_deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-        scene_post_deps[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        scene_post_deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        scene_post_deps[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        scene_post_deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        VkRenderPassCreateInfo scene_post_rp_ci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        scene_post_rp_ci.attachmentCount = 1;
-        scene_post_rp_ci.pAttachments = &scene_post_attachment;
-        scene_post_rp_ci.subpassCount = 1;
-        scene_post_rp_ci.pSubpasses = &scene_post_subpass;
-        scene_post_rp_ci.dependencyCount = 2;
-        scene_post_rp_ci.pDependencies = scene_post_deps;
-        if (vkCreateRenderPass(device, &scene_post_rp_ci, nullptr, &scene_post_render_pass) != VK_SUCCESS)
-        {
-            DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity: failed to create scene post render pass");
-            return false;
-        }
+        scene_sample_count = hdr_pipeline.sample_count();
+        scene_render_pass = hdr_pipeline.scene_render_pass();
+        scene_post_render_pass = hdr_pipeline.tone_map_render_pass();
 
         auto ao_vert = load_shader(device, (shader_dir / "megacity_ao.vert.spv").string());
         auto ao_frag = load_shader(device, (shader_dir / "megacity_ao.frag.spv").string());
@@ -3585,8 +3327,11 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
     // Update frame uniforms
     FrameUniforms frame;
     frame.view = scene_.camera.view;
-    frame.proj = make_vulkan_projection(scene_.camera.proj);
-    frame.inv_view_proj = glm::inverse(frame.proj * frame.view);
+    // Projection and its inverse always come from the same call, so the
+    // Y-flipped proj can never be paired with an unflipped inverse.
+    const CodeVizClipMatrices clip = build_clip_matrices(scene_.camera, ClipConvention::YDown);
+    frame.proj = clip.proj;
+    frame.inv_view_proj = clip.inv_view_proj;
     frame.camera_pos = scene_.camera.camera_pos;
     frame.light_dir = scene_.camera.light_dir;
     frame.point_light_pos = scene_.camera.point_light_pos;

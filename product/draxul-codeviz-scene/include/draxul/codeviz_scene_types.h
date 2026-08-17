@@ -155,6 +155,65 @@ struct CodeVizCameraData
     CodeVizProjectionMode projection_mode = CodeVizProjectionMode::Orthographic;
 };
 
+// ---- Clip-space convention --------------------------------------------------
+//
+// CodeVizCameraData::proj is built with glm's *RH_ZO helpers, i.e. Y up in NDC.
+// Metal keeps that; Vulkan's NDC has Y down, so the Vulkan backend negates
+// proj[1][1] before uploading.
+//
+// THE HAZARD THIS REMOVES: frame.inv_view_proj must invert the SAME projection
+// that frame.proj carries, because the shaders build an NDC vector consistent
+// with frame.proj (see uv_to_ndc, which branches on the sign of proj[1][1]) and
+// then multiply it by frame.inv_view_proj. The two backends satisfied that in
+// two different ways with nothing tying them together: Vulkan recomputed
+// inverse(flipped_proj * view) locally while Metal uploaded the snapshot's
+// camera.inv_view_proj, which is the UNFLIPPED inverse. Both happened to be
+// self-consistent, but the pairing was implicit — a backend that reached for the
+// obvious camera.inv_view_proj while uploading a flipped proj would silently
+// reconstruct mirrored world positions in the AO and debug passes.
+//
+// build_clip_matrices() returns the pair together, so the two can no longer
+// disagree. camera.inv_view_proj stays the CPU-side, unflipped matrix used by
+// backend-neutral code such as the shadow-cascade fitting (which is unaffected
+// by the flip: it unprojects a symmetric ±1 corner set).
+enum class ClipConvention : uint8_t
+{
+    // NDC Y up (glm / Metal).
+    YUp,
+    // NDC Y down (Vulkan).
+    YDown,
+};
+
+struct CodeVizClipMatrices
+{
+    glm::mat4 proj{ 1.0f };
+    glm::mat4 inv_view_proj{ 1.0f };
+};
+
+inline glm::mat4 apply_clip_convention(glm::mat4 proj, ClipConvention convention)
+{
+    if (convention == ClipConvention::YDown)
+        proj[1][1] *= -1.0f;
+    return proj;
+}
+
+// The projection to upload and its matching inverse-view-projection, always
+// derived from the same matrix.
+inline CodeVizClipMatrices build_clip_matrices(
+    const glm::mat4& view, const glm::mat4& proj, ClipConvention convention)
+{
+    CodeVizClipMatrices matrices;
+    matrices.proj = apply_clip_convention(proj, convention);
+    matrices.inv_view_proj = glm::inverse(matrices.proj * view);
+    return matrices;
+}
+
+inline CodeVizClipMatrices build_clip_matrices(
+    const CodeVizCameraData& camera, ClipConvention convention)
+{
+    return build_clip_matrices(camera.view, camera.proj, convention);
+}
+
 struct FloorGridSpec
 {
     bool enabled = false;

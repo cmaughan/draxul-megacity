@@ -201,30 +201,12 @@ bool create_sampled_image(VkPhysicalDevice physical_device, VkDevice device, Vma
     ImageResource& image)
 {
     PERF_MEASURE();
-    const uint32_t mip_levels = generate_mips
-        ? static_cast<uint32_t>(std::floor(std::log2(static_cast<double>(std::max(width, height))))) + 1
-        : 1u;
-    VkImageCreateInfo image_info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.format = format;
-    image_info.extent = { static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1 };
-    image_info.mipLevels = mip_levels;
-    image_info.arrayLayers = 1;
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    if (mip_levels > 1)
-        image_info.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    vkresources::ScopedImage created_image;
+    vkresources::SampledImageResource created;
     std::string error;
-    if (!vkresources::create_image(device, allocator,
-            vkresources::ImageRequest(image_info, VK_IMAGE_VIEW_TYPE_2D,
-                VK_IMAGE_ASPECT_COLOR_BIT, vkresources::MemoryPolicy::DevicePreferred,
-                final_layout, debug_name, lifetime),
-            created_image, error))
+    if (!vkresources::create_sampled_image(physical_device, device, allocator,
+            vkresources::SampledImageRequest(width, height, format, address_mode, generate_mips,
+                final_layout, lifetime, debug_name),
+            created, error))
     {
         DRAXUL_LOG_ERROR(LogCategory::Renderer,
             "MegaCity scene: failed to create sampled image %.*s: %s",
@@ -232,36 +214,14 @@ bool create_sampled_image(VkPhysicalDevice physical_device, VkDevice device, Vma
         return false;
     }
 
-    VkSamplerCreateInfo sampler_info{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    sampler_info.magFilter = VK_FILTER_LINEAR;
-    sampler_info.minFilter = VK_FILTER_LINEAR;
-    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    sampler_info.addressModeU = address_mode;
-    sampler_info.addressModeV = address_mode;
-    sampler_info.addressModeW = address_mode;
-    sampler_info.maxLod = static_cast<float>(mip_levels - 1);
-    VkPhysicalDeviceFeatures features{};
-    vkGetPhysicalDeviceFeatures(physical_device, &features);
-    if (features.samplerAnisotropy)
-    {
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(physical_device, &properties);
-        sampler_info.anisotropyEnable = VK_TRUE;
-        sampler_info.maxAnisotropy = std::min(8.0f, properties.limits.maxSamplerAnisotropy);
-    }
-    VkSampler sampler = VK_NULL_HANDLE;
-    if (vkCreateSampler(device, &sampler_info, nullptr, &sampler) != VK_SUCCESS)
-        return false;
-
-    const vkresources::ImageResource created = created_image.release();
     image.image = created.image;
     image.allocation = created.allocation;
     image.view = created.view;
-    image.sampler = sampler;
-    image.width = width;
-    image.height = height;
+    image.sampler = created.sampler;
+    image.width = created.width;
+    image.height = created.height;
     image.size = static_cast<VkDeviceSize>(width) * height * 4;
-    image.mip_levels = mip_levels;
+    image.mip_levels = created.mip_levels;
     return true;
 }
 
@@ -276,13 +236,13 @@ bool create_label_image(VkPhysicalDevice physical_device, VkDevice device, VmaAl
 
 VkSampleCountFlagBits choose_scene_sample_count(VkPhysicalDevice physical_device)
 {
-    VkPhysicalDeviceProperties properties{};
-    vkGetPhysicalDeviceProperties(physical_device, &properties);
-    const VkSampleCountFlags counts = properties.limits.framebufferColorSampleCounts
-        & properties.limits.framebufferDepthSampleCounts;
-    return (counts & VK_SAMPLE_COUNT_4_BIT) != 0
-        ? VK_SAMPLE_COUNT_4_BIT
-        : VK_SAMPLE_COUNT_1_BIT;
+    // Bug #7: this used to consult only the device's framebuffer sample-count
+    // LIMITS, which can advertise 4x for a format the device cannot actually
+    // multisample, and it had no 2x rung between 4x and 1x. The shared probe
+    // queries the real per-format support for the scene's colour and depth
+    // formats and walks 4x -> 2x -> 1x.
+    return vkresources::choose_scene_sample_count(
+        physical_device, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
 }
 
 bool create_attachment_image(VkDevice device, VmaAllocator allocator, int width, int height,
@@ -292,44 +252,28 @@ bool create_attachment_image(VkDevice device, VmaAllocator allocator, int width,
     VkImage& image, VmaAllocation& allocation, VkImageView& view)
 {
     PERF_MEASURE();
-    VkImageCreateInfo image_info{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-    image_info.flags = flags;
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.format = format;
-    image_info.extent = { static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1u };
-    image_info.mipLevels = 1;
-    image_info.arrayLayers = 1;
-    image_info.samples = samples;
-    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image_info.usage = usage;
-    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    vkresources::ScopedImage created_image;
+    vkresources::AttachmentResource attachment;
     std::string error;
-    if (!vkresources::create_image(device, allocator,
-            vkresources::ImageRequest(image_info, VK_IMAGE_VIEW_TYPE_2D,
-                aspect_mask, vkresources::MemoryPolicy::DevicePreferred,
-                final_layout, debug_name, lifetime),
-            created_image, error))
+    if (!vkresources::create_attachment(device, allocator,
+            vkresources::AttachmentRequest(width, height, format, usage, aspect_mask, samples,
+                flags, final_layout, lifetime, debug_name),
+            attachment, error))
+    {
+        DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity scene: %s", error.c_str());
         return false;
-    const vkresources::ImageResource created = created_image.release();
-    image = created.image;
-    allocation = created.allocation;
-    view = created.view;
+    }
+    image = attachment.image;
+    allocation = attachment.allocation;
+    view = attachment.view;
     return true;
 }
 
 bool create_attachment_view(VkDevice device, VkImage image, VkFormat format,
     VkImageAspectFlags aspect_mask, std::string_view debug_name, VkImageView& view)
 {
-    VkImageSubresourceRange range{};
-    range.aspectMask = aspect_mask;
-    range.levelCount = 1;
-    range.layerCount = 1;
     std::string error;
-    return vkresources::create_image_view(device, image, format,
-        VK_IMAGE_VIEW_TYPE_2D, range, debug_name, view, error);
+    return vkresources::create_attachment_view(device, image, format, aspect_mask,
+        debug_name, view, error);
 }
 
 bool create_cube_attachment_image(VkDevice device, VmaAllocator allocator, int size,
@@ -543,15 +487,7 @@ bool upload_rgba_texture(VkDevice device, VmaAllocator allocator, VkCommandBuffe
 VkShaderModule load_shader(VkDevice device, const std::string& path)
 {
     PERF_MEASURE();
-    const std::filesystem::path shader_path(path);
-    const std::string debug_name = "megacity.shader." + shader_path.filename().string();
-    std::string error;
-    const VkShaderModule shader_module = vkresources::load_shader_module(
-        device, shader_path, debug_name, error);
-    if (shader_module == VK_NULL_HANDLE)
-        DRAXUL_LOG_ERROR(LogCategory::Renderer, "MegaCity scene: %s", error.c_str());
-    return shader_module;
+    return vkresources::load_shader(device, std::filesystem::path(path), "MegaCity");
 }
-
 
 } // namespace draxul::codeviz_vk

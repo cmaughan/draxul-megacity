@@ -13,6 +13,8 @@ target_link_libraries(draxul-codeviz-host
     PUBLIC
         draxul-codeviz-scene
         Draxul::PluginSupport::Types
+        # codeviz_input_state.h exposes the shared OrbitKeyState/DragSmoother.
+        Draxul::PluginSupport::CameraInput
     PRIVATE
         Draxul::PluginSupport::Performance
         ${DRAXUL_MEGACITY_SDL_TARGET}
