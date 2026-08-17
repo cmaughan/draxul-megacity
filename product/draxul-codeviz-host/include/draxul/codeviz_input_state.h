@@ -1,6 +1,18 @@
 #pragma once
 
-#include <chrono>
+// MegaCity's binding of the SHARED camera input layer
+// (Draxul::PluginSupport::CameraInput). The key latch table, the Ctrl+R guard,
+// the drag inertia and the click/double-click detection all live in
+// draxul/camera_input.h now; what stays here is MegaCity's camera policy: which
+// axes the key groups drive and how a screen-space drag becomes camera motion.
+//
+// WHY THESE BINDINGS: MegaCity's isometric city view can pan, so the arrows and
+// WASD drive the pan axes, Q/E orbit and T/G are a separate pitch axis.
+// SatView's globe cannot pan, so it folds the same groups into its orbit axes.
+// Neither is "the" intended mapping — they are different cameras, and the shared
+// table exposes the axes separately so each product picks.
+
+#include <draxul/camera_input.h>
 #include <draxul/events.h>
 #include <glm/vec2.hpp>
 #include <optional>
@@ -16,6 +28,16 @@ struct CameraMovement
     float orbit = 0.0f;
     float zoom = 0.0f;
     float pitch = 0.0f;
+};
+
+// Arrows/WASD pan, Q/E orbit, T/G pitch, R/F zoom with Ctrl+R reserved for the
+// host. The Ctrl+R guard is new here: it came from SatView's copy of the table
+// and is the canonical behaviour now.
+inline constexpr camera_input::OrbitKeyBindings kMegacityCameraBindings{
+    .horizontal_arrows_orbit = false,
+    .vertical_arrows_orbit = false,
+    .pitch_folds_into_orbit = false,
+    .zoom_in_guard_modifiers = kModCtrl,
 };
 
 // Self-contained input state machine for code-visualization views.
@@ -50,27 +72,8 @@ public:
     bool apply_drag_smoothing(float dt, IsometricCamera& camera);
 
 private:
-    bool move_left_ = false;
-    bool move_right_ = false;
-    bool move_up_ = false;
-    bool move_down_ = false;
-    bool orbit_left_ = false;
-    bool orbit_right_ = false;
-    bool zoom_in_ = false;
-    bool zoom_out_ = false;
-    bool pitch_up_ = false;
-    bool pitch_down_ = false;
-    bool dragging_scene_ = false;
-    glm::vec2 pending_drag_pan_{ 0.0f };
-    float pending_drag_orbit_ = 0.0f;
-    glm::ivec2 last_drag_pos_{ 0 };
-    glm::ivec2 press_pos_{ 0 };
-    bool was_dragged_ = false;
-    std::optional<glm::ivec2> pending_click_;
-    std::optional<glm::ivec2> pending_double_click_;
-    std::chrono::steady_clock::time_point last_click_time_{};
-    glm::ivec2 last_click_pos_{ 0 };
-    bool has_last_click_ = false;
+    camera_input::OrbitKeyState keys_{ kMegacityCameraBindings };
+    camera_input::DragSmoother drag_;
 };
 
 } // namespace draxul
