@@ -1,6 +1,14 @@
 set(_megacity_root "${CMAKE_CURRENT_LIST_DIR}/..")
 file(GLOB _megacity_test_sources CONFIGURE_DEPENDS
     "${_megacity_root}/tests/*_tests.cpp")
+set(_megacity_parser_test_source
+    "${_megacity_root}/tests/treesitter_tests.cpp")
+list(REMOVE_ITEM _megacity_test_sources "${_megacity_parser_test_source}")
+
+draxul_add_test_target(
+    draxul-test-megacity-parser megacity 1 ${_megacity_parser_test_source})
+target_link_libraries(draxul-test-megacity-parser PRIVATE draxul-treesitter)
+target_compile_definitions(draxul-test-megacity-parser PRIVATE DRAXUL_ENABLE_MEGACITY)
 
 draxul_add_test_target(
     draxul-test-megacity megacity 2 ${_megacity_test_sources})

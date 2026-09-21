@@ -2,6 +2,24 @@
 
 #ifdef DRAXUL_ENABLE_MEGACITY
 
+TEST_CASE("semantic layout options adapt CPU model settings", "[megacity]")
+{
+    MegaCityCodeConfig config;
+    config.placement_step = 0.75f;
+    config.max_spiral_rings = 123;
+    config.struct_brick_grid_size = 4;
+    config.dependency_route_layer_step = 0.42f;
+    config.park_footprint = 9.0f;
+    config.ao_radius = 99.0f;
+
+    const SemanticCityLayoutOptions options = semantic_city_layout_options_from_config(config);
+    CHECK(options.placement_step == Catch::Approx(0.75f));
+    CHECK(options.max_spiral_rings == 123);
+    CHECK(options.struct_brick_grid_size == 4);
+    CHECK(options.dependency_route_layer_step == Catch::Approx(0.42f));
+    CHECK(options.park_footprint == Catch::Approx(9.0f));
+}
+
 TEST_CASE("semantic city layout starts with the tallest building at the origin", "[megacity]")
 {
     std::vector<CityClassRecord> rows;
@@ -661,6 +679,69 @@ TEST_CASE("selection routes allocate distinct target ports", "[megacity]")
     CHECK(glm::distance(end_a, end_b) > 1e-3f);
     CHECK(glm::distance(end_a, end_c) > 1e-3f);
     CHECK(glm::distance(end_b, end_c) > 1e-3f);
+}
+
+TEST_CASE("failed routes do not shift the endpoint identity of later routes", "[megacity]")
+{
+    auto make_building = [](std::string path, glm::vec2 center, float layer_height) {
+        SemanticCityBuilding building;
+        building.module_path = "route-test";
+        building.qualified_name = "focus";
+        building.source_file_path = std::move(path);
+        building.center = center;
+        building.metrics = { 2.0f, layer_height, 0.5f, 0.5f };
+        building.is_free_function = true;
+        building.layers.push_back({ "focus", building.source_file_path, 1, layer_height });
+        return building;
+    };
+
+    SemanticCityBuilding source = make_building("source.cpp", { 2.0f, 2.0f }, 6.0f);
+    SemanticCityBuilding failed_target = make_building("failed-target.cpp", { 45.0f, 2.0f }, 30.0f);
+    failed_target.qualified_name = "failed-target";
+    SemanticCityBuilding valid_target = make_building("valid-target.cpp", { 7.0f, 2.0f }, 10.0f);
+    valid_target.qualified_name = "valid-target";
+
+    SemanticCityModuleLayout module_layout;
+    module_layout.module_path = "route-test";
+    module_layout.buildings = { source, failed_target, valid_target };
+    SemanticMegacityLayout layout;
+    layout.modules.push_back(module_layout);
+
+    SemanticMegacityModel model;
+    model.modules.push_back({ module_layout.module_path, 0, 0.5f, {}, module_layout.buildings });
+    model.dependencies.push_back({
+        "route-test", "focus", "failed", "Failed", "route-test", "failed-target",
+        source.source_file_path, failed_target.source_file_path,
+    });
+    model.dependencies.push_back({
+        "route-test", "focus", "valid", "Valid", "route-test", "valid-target",
+        source.source_file_path, valid_target.source_file_path,
+    });
+
+    CityGrid grid;
+    grid.cols = 100;
+    grid.rows = 10;
+    grid.cell_size = 0.5f;
+    grid.origin_x = 0.0f;
+    grid.origin_z = 0.0f;
+    grid.cells.assign(static_cast<size_t>(grid.cols * grid.rows), kCityGridEmpty);
+    // Only the valid pair has road cells within the pathfinder's search radius.
+    for (int row = 0; row < grid.rows; ++row)
+        for (int col = 0; col < 20; ++col)
+            grid.cells[static_cast<size_t>(row * grid.cols + col)] = kCityGridRoad;
+
+    MegaCityCodeConfig config;
+    config.placement_step = 0.5f;
+    config.sidewalk_surface_height = 0.0f;
+    config.sidewalk_surface_lift = 0.0f;
+    const auto routes = build_city_routes_for_selection(
+        layout, model, grid, config,
+        source.source_file_path, source.module_path, source.qualified_name, "focus");
+
+    REQUIRE(routes.size() == 1);
+    CHECK(routes.front().source_file_path == source.source_file_path);
+    CHECK(routes.front().source_elevation == Catch::Approx(3.0f));
+    CHECK(routes.front().target_elevation == Catch::Approx(5.0f));
 }
 
 TEST_CASE("route render segments preserve independent route geometry", "[megacity]")

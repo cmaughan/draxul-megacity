@@ -28,6 +28,12 @@ draxul-treesitter -> draxul-code-semantics -------------------------------------
 
 Avoid publishing Megacity-specific types outside this module unless another product module has a demonstrated need for them. Public API headers belong under the owning library's `include/draxul/`; internal headers belong under `src/`. Never duplicate a header in both places.
 
+Tree-sitter source extraction is a synchronous source-text operation inside
+`draxul-treesitter`. It reuses one parser/query resource set for a scan and
+returns a complete `ParsedFile` before the scanner updates progress or publishes
+its immutable snapshot. Directory traversal, file filtering, cancellation, and
+publication remain scanner responsibilities.
+
 ## Rendering
 
 - Windows rendering lives in `draxul-codeviz-renderer/src/codeviz_render_vk.cpp`; macOS rendering lives in `draxul-codeviz-renderer/src/codeviz_render.mm`.
@@ -67,11 +73,14 @@ Megacity has background work in the Tree-sitter scanner, city-grid builds, and d
 During development, build and run the focused plugin-owned suite:
 
 ```powershell
-cmake --build build-ninja-release --target draxul-test-megacity
-& .\build-ninja-release\tests\draxul-test-megacity.exe --reporter compact
+py do.py test debug --megacity
 ```
 
-On macOS, use the corresponding configured build directory and focused target.
+On macOS, use `python3 do.py test debug --megacity`. Both commands select the
+canonical Debug development cache and include the core and MegaCity aggregates.
+When diagnosing a failure, build `draxul-test-megacity` in that same cache and
+run its executable with a Catch2 name or tag filter; do not create a second
+Release cache for the focused rerun.
 
 Before completing MegaCity work, follow the root validation rules: build `draxul` and the focused tests, run smoke, and run relevant integration/render suites. Inspect both `{"mode":"city"}` and `{"mode":"biology"}` through plugin panes on the available platform. If only one platform is available, inspect the other backend carefully and state that runtime validation remains outstanding.
 

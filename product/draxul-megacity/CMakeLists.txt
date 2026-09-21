@@ -14,7 +14,6 @@ set(MEGACITY_SOURCES
     src/metrics_overlay_controller.cpp
     src/scene_snapshot_builder.cpp
     src/scene_publication.cpp
-    src/semantic_city_layout.cpp
     src/semantic_source_controller.cpp
     src/sign_label_atlas.cpp
     src/static_mesh_family_cache.cpp
@@ -44,6 +43,7 @@ target_link_libraries(draxul-megacity PUBLIC
     draxul-codeviz-host
     draxul-code-semantics
     draxul-treesitter
+    draxul-megacity-model
     Draxul::PluginSupport::ImGui
     imgui
     ${DRAXUL_MEGACITY_SDL_TARGET}
@@ -61,4 +61,3 @@ target_include_directories(draxul-megacity-test-internals INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(draxul-megacity-test-internals INTERFACE draxul-megacity)
-

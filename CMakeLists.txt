@@ -104,6 +104,7 @@ set(_megacity_product_targets
     draxul-codeviz-host
     draxul-treesitter
     draxul-code-semantics
+    draxul-megacity-model
     draxul-megacity
     draxul-megacity-plugin)
 foreach(_target IN LISTS _megacity_product_targets)

@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -506,25 +507,48 @@ void CodebaseScanner::scan_thread(std::filesystem::path root)
     PERF_MEASURE();
     const TSLanguage* lang = tree_sitter_cpp();
 
-    TSParser* parser = ts_parser_new();
+    struct ParserResources
+    {
+        TSParser* parser = nullptr;
+        TSQuery* query = nullptr;
+        TSQueryCursor* cursor = nullptr;
+        TSQuery* abstract_query = nullptr;
+        TSQueryCursor* abstract_cursor = nullptr;
+
+        ~ParserResources()
+        {
+            if (abstract_cursor)
+                ts_query_cursor_delete(abstract_cursor);
+            if (abstract_query)
+                ts_query_delete(abstract_query);
+            if (cursor)
+                ts_query_cursor_delete(cursor);
+            if (query)
+                ts_query_delete(query);
+            if (parser)
+                ts_parser_delete(parser);
+        }
+    } resources;
+
+    TSParser* parser = resources.parser = ts_parser_new();
     ts_parser_set_language(parser, lang);
 
     uint32_t error_offset = 0;
     TSQueryError error_type = TSQueryErrorNone;
-    TSQuery* query = ts_query_new(
+    TSQuery* query = resources.query = ts_query_new(
         lang, kCppQuery.data(), static_cast<uint32_t>(kCppQuery.size()),
         &error_offset, &error_type);
     // query may be null if the grammar version is incompatible; we continue
     // without symbol extraction but still count errors
 
-    TSQueryCursor* cursor = query ? ts_query_cursor_new() : nullptr;
+    TSQueryCursor* cursor = resources.cursor = query ? ts_query_cursor_new() : nullptr;
 
     // Abstract-class detection is best-effort: if the grammar version doesn't
     // support pure_specifier the query won't compile and we fall back gracefully.
-    TSQuery* abstract_query = ts_query_new(
+    TSQuery* abstract_query = resources.abstract_query = ts_query_new(
         lang, kAbstractQuery.data(), static_cast<uint32_t>(kAbstractQuery.size()),
         &error_offset, &error_type);
-    TSQueryCursor* abstract_cursor = abstract_query ? ts_query_cursor_new() : nullptr;
+    TSQueryCursor* abstract_cursor = resources.abstract_cursor = abstract_query ? ts_query_cursor_new() : nullptr;
 
     auto snapshot = std::make_shared<CodebaseSnapshot>();
     snapshot->scan_time = std::chrono::steady_clock::now();
@@ -535,15 +559,6 @@ void CodebaseScanner::scan_thread(std::filesystem::path root)
     if (ec)
     {
         finish_progress(false);
-        ts_parser_delete(parser);
-        if (abstract_cursor)
-            ts_query_cursor_delete(abstract_cursor);
-        if (abstract_query)
-            ts_query_delete(abstract_query);
-        if (cursor)
-            ts_query_cursor_delete(cursor);
-        if (query)
-            ts_query_delete(query);
         return;
     }
 
@@ -579,18 +594,23 @@ void CodebaseScanner::scan_thread(std::filesystem::path root)
             static_cast<uint64_t>(source.size()),
             std::memory_order_relaxed);
 
-        TSTree* tree = ts_parser_parse_string(
-            parser, nullptr, source.c_str(),
-            static_cast<uint32_t>(source.size()));
-        if (!tree)
-            continue;
+        // The synchronous parse operation owns no scanner state: it consumes
+        // source text and a normalized path, while reusing this scan's parser
+        // and query resources. Filesystem traversal and publication remain in
+        // CodebaseScanner.
+        const auto parse_source = [&]() -> std::optional<ParsedFile> {
+            std::unique_ptr<TSTree, decltype(&ts_tree_delete)> tree(
+                ts_parser_parse_string(
+                    parser, nullptr, source.c_str(),
+                    static_cast<uint32_t>(source.size())),
+                &ts_tree_delete);
+            if (!tree)
+                return std::nullopt;
 
-        progress_source_files_parsed_.fetch_add(1, std::memory_order_relaxed);
-        ParsedFile file;
-        // Normalise to forward slashes for display
-        file.path = rel.generic_string();
+            ParsedFile file;
+            file.path = rel.generic_string();
 
-        const TSNode root_node = ts_tree_root_node(tree);
+        const TSNode root_node = ts_tree_root_node(tree.get());
 
         // Collect ERROR node positions for display in the UI.
         if (ts_node_has_error(root_node))
@@ -750,8 +770,13 @@ void CodebaseScanner::scan_thread(std::filesystem::path root)
             }
         }
 
-        ts_tree_delete(tree);
-        snapshot->files.push_back(std::move(file));
+            return file;
+        };
+        std::optional<ParsedFile> parsed_file = parse_source();
+        if (!parsed_file.has_value())
+            continue;
+        progress_source_files_parsed_.fetch_add(1, std::memory_order_relaxed);
+        snapshot->files.push_back(std::move(*parsed_file));
 
     }
 
@@ -771,15 +796,6 @@ void CodebaseScanner::scan_thread(std::filesystem::path root)
     publish(std::move(snapshot));
     finish_progress(!ec && !stopped);
 
-    if (abstract_cursor)
-        ts_query_cursor_delete(abstract_cursor);
-    if (abstract_query)
-        ts_query_delete(abstract_query);
-    if (cursor)
-        ts_query_cursor_delete(cursor);
-    if (query)
-        ts_query_delete(query);
-    ts_parser_delete(parser);
 }
 
 } // namespace draxul

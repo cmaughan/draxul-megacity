@@ -264,6 +264,7 @@ struct CodeVizScenePass::State
     const MeshData* foliage_stem_mesh_source = nullptr;
     const MeshData* foliage_card_mesh_source = nullptr;
     std::vector<MeshBuffers> custom_meshes;
+    std::vector<const MeshData*> custom_mesh_sources;
     Buffer custom_vertex_pool;
     Buffer custom_index_pool;
     MeshData cached_grid_mesh;
@@ -947,6 +948,13 @@ struct CodeVizScenePass::State
     {
         PERF_MEASURE();
 
+        std::vector<const MeshData*> requested_sources;
+        requested_sources.reserve(custom_mesh_data.size());
+        for (const auto& mesh_data : custom_mesh_data)
+            requested_sources.push_back(mesh_data.get());
+        if (requested_sources == custom_mesh_sources)
+            return true;
+
         // Compute total vertex and index bytes across all custom meshes.
         size_t total_vertex_bytes = 0;
         size_t total_index_bytes = 0;
@@ -960,36 +968,34 @@ struct CodeVizScenePass::State
             total_index_bytes += mesh_data->indices.size() * sizeof(uint16_t);
         }
 
-        // Clear non-owning MeshBuffers before touching pool buffers.
-        custom_meshes.clear();
-
         if (total_vertex_bytes == 0 || total_index_bytes == 0)
         {
+            custom_meshes.clear();
+            custom_mesh_sources = std::move(requested_sources);
             retire_buffer(custom_vertex_pool, current_frame_index);
             retire_buffer(custom_index_pool, current_frame_index);
             return true;
         }
 
-        // Ensure pool buffers are large enough.
-        if (total_vertex_bytes > custom_vertex_pool.size)
+        // Publish an immutable pool generation. Even a same-capacity rewrite can
+        // race a previously submitted frame, so replacements are always created
+        // before the old generation is retired.
+        Buffer replacement_vertices;
+        Buffer replacement_indices;
+        if (!create_mapped_buffer(device, allocator, total_vertex_bytes,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vkresources::LifetimeScope::Persistent,
+                "megacity.custom-mesh.vertices", replacement_vertices)
+            || !create_mapped_buffer(device, allocator, total_index_bytes,
+                VK_BUFFER_USAGE_INDEX_BUFFER_BIT, vkresources::LifetimeScope::Persistent,
+                "megacity.custom-mesh.indices", replacement_indices))
         {
-            if (!ensure_retired_mapped_buffer_capacity(
-                    total_vertex_bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                    vkresources::LifetimeScope::Persistent, "megacity.custom-mesh.vertices",
-                    custom_vertex_pool, total_vertex_bytes, current_frame_index))
-                return false;
-        }
-        if (total_index_bytes > custom_index_pool.size)
-        {
-            if (!ensure_retired_mapped_buffer_capacity(
-                    total_index_bytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                    vkresources::LifetimeScope::Persistent, "megacity.custom-mesh.indices",
-                    custom_index_pool, total_index_bytes, current_frame_index))
-                return false;
+            destroy_buffer(allocator, replacement_vertices);
+            destroy_buffer(allocator, replacement_indices);
+            return false;
         }
 
         // Pack all mesh data into the consolidated buffers and build per-mesh slices.
-        custom_meshes.resize(custom_mesh_data.size());
+        std::vector<MeshBuffers> replacement_meshes(custom_mesh_data.size());
         size_t vertex_cursor = 0;
         size_t index_cursor = 0;
         for (size_t i = 0; i < custom_mesh_data.size(); ++i)
@@ -1003,14 +1009,14 @@ struct CodeVizScenePass::State
 
             const size_t vbytes = mesh_data->vertices.size() * sizeof(SceneVertex);
             const size_t ibytes = mesh_data->indices.size() * sizeof(uint16_t);
-            std::memcpy(static_cast<uint8_t*>(custom_vertex_pool.mapped) + vertex_cursor,
+            std::memcpy(static_cast<uint8_t*>(replacement_vertices.mapped) + vertex_cursor,
                 mesh_data->vertices.data(), vbytes);
-            std::memcpy(static_cast<uint8_t*>(custom_index_pool.mapped) + index_cursor,
+            std::memcpy(static_cast<uint8_t*>(replacement_indices.mapped) + index_cursor,
                 mesh_data->indices.data(), ibytes);
 
-            MeshBuffers& entry = custom_meshes[i];
-            entry.vertices.buffer = custom_vertex_pool.buffer;
-            entry.indices.buffer = custom_index_pool.buffer;
+            MeshBuffers& entry = replacement_meshes[i];
+            entry.vertices.buffer = replacement_vertices.buffer;
+            entry.indices.buffer = replacement_indices.buffer;
             entry.index_count = static_cast<uint32_t>(mesh_data->indices.size());
             entry.first_index = static_cast<uint32_t>(index_cursor / sizeof(uint16_t));
             entry.vertex_offset = static_cast<int32_t>(vertex_cursor / sizeof(SceneVertex));
@@ -1019,9 +1025,38 @@ struct CodeVizScenePass::State
             index_cursor += ibytes;
         }
 
-        vmaFlushAllocation(allocator, custom_vertex_pool.allocation, 0, vertex_cursor);
-        vmaFlushAllocation(allocator, custom_index_pool.allocation, 0, index_cursor);
+        vmaFlushAllocation(allocator, replacement_vertices.allocation, 0, vertex_cursor);
+        vmaFlushAllocation(allocator, replacement_indices.allocation, 0, index_cursor);
+        custom_meshes = std::move(replacement_meshes);
+        custom_mesh_sources = std::move(requested_sources);
+        retire_buffer(custom_vertex_pool, current_frame_index);
+        retire_buffer(custom_index_pool, current_frame_index);
+        custom_vertex_pool = std::move(replacement_vertices);
+        custom_index_pool = std::move(replacement_indices);
         return true;
+    }
+
+    void refresh_ao_descriptor(uint32_t frame_index, bool use_raw_ao)
+    {
+        if (frame_index >= frame_resources.size() || frame_index >= gbuffer_targets.size())
+            return;
+        auto& frame = frame_resources[frame_index];
+        const auto& gbuffer = gbuffer_targets[frame_index];
+        const VkImageView view = use_raw_ao ? gbuffer.ao_raw_view : gbuffer.ao_view;
+        if (frame.descriptor_set == VK_NULL_HANDLE || gbuffer_sampler == VK_NULL_HANDLE
+            || view == VK_NULL_HANDLE)
+            return;
+        VkDescriptorImageInfo ao_info = {};
+        ao_info.sampler = gbuffer_sampler;
+        ao_info.imageView = view;
+        ao_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = frame.descriptor_set;
+        write.dstBinding = 3;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &ao_info;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
     void refresh_gbuffer_descriptors()
@@ -3663,6 +3698,11 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
     scissor.extent = { static_cast<uint32_t>(vw), static_cast<uint32_t>(vh) };
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    // Binding 3 is selected before this frame's descriptor set is first bound.
+    // Updating it later would invalidate every command that already captured
+    // the set, even when those earlier shaders do not sample AO.
+    const int debug_mode = static_cast<int>(scene_.camera.debug_view.x + 0.5f);
+    state_->refresh_ao_descriptor(frame_index, debug_mode == 1);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state_->gbuffer_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state_->pipeline_layout,
         0, 1, &frame_res.descriptor_set, 0, nullptr);
@@ -3782,22 +3822,6 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
 
     if (gbuffer.scene_framebuffer == VK_NULL_HANDLE || gbuffer.scene_post_framebuffer == VK_NULL_HANDLE)
         return;
-
-    const int debug_mode = static_cast<int>(scene_.camera.debug_view.x + 0.5f);
-    if (debug_mode == 1 && gbuffer.ao_raw_view != VK_NULL_HANDLE)
-    {
-        VkDescriptorImageInfo raw_ao_info = {};
-        raw_ao_info.sampler = state_->gbuffer_sampler;
-        raw_ao_info.imageView = gbuffer.ao_raw_view;
-        raw_ao_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-        write.dstSet = frame_res.descriptor_set;
-        write.dstBinding = 3;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = &raw_ao_info;
-        vkUpdateDescriptorSets(vk_ctx->device(), 1, &write, 0, nullptr);
-    }
 
     VkClearValue scene_clears[3] = {};
     scene_clears[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
@@ -3938,20 +3962,6 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
-    if (debug_mode == 1 && gbuffer.ao_view != VK_NULL_HANDLE)
-    {
-        VkDescriptorImageInfo ao_info = {};
-        ao_info.sampler = state_->gbuffer_sampler;
-        ao_info.imageView = gbuffer.ao_view;
-        ao_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-        write.dstSet = frame_res.descriptor_set;
-        write.dstBinding = 3;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo = &ao_info;
-        vkUpdateDescriptorSets(vk_ctx->device(), 1, &write, 0, nullptr);
-    }
 }
 
 void CodeVizScenePass::record(IRenderContext& ctx)

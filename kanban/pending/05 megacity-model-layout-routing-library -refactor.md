@@ -12,19 +12,19 @@ model/layout/grid/routing implementation files and direct deterministic tests.
 
 ## Boundary verification
 
-- [ ] Classify every record/function in `semantic_city_layout.h/.cpp` as semantic
+- [x] Classify every record/function in `semantic_city_layout.h/.cpp` as semantic
   model, spatial layout, grid, routing, or downstream scene/presentation behavior.
-- [ ] Inventory all production/test consumers and required public value types.
-- [ ] Identify the subset of `MegaCityCodeConfig` actually consumed by model/layout/routing.
-- [ ] Define deterministic ordering, stable identity, route, and geometry-index invariants.
-- [ ] Confirm host worker cancellation/publication stays outside the proposed library.
+- [x] Inventory all production/test consumers and required public value types.
+- [x] Identify the subset of `MegaCityCodeConfig` actually consumed by model/layout/routing.
+- [x] Define deterministic ordering, stable identity, route, and geometry-index invariants.
+- [x] Confirm host worker cancellation/publication stays outside the proposed library.
 
 ## Implementation and migration
 
-- [ ] Introduce a narrow `SemanticCityLayoutOptions` value and an adapter from `MegaCityCodeConfig`.
-- [ ] Add module-owned public model/layout/grid/route headers with immutable records/functions.
-- [ ] Create `draxul-megacity-model` initially around the existing single implementation TU.
-- [ ] Link `draxul-megacity` and focused tests directly to the new target.
+- [x] Introduce a narrow `SemanticCityLayoutOptions` value and an adapter from `MegaCityCodeConfig`.
+- [x] Add module-owned public model/layout/grid/route headers with immutable records/functions.
+- [x] Create `draxul-megacity-model` initially around the existing single implementation TU.
+- [x] Link `draxul-megacity` and focused tests directly to the new target.
 - [ ] Split implementation into semantic model, spatial layout, city grid, and routing TUs.
 - [ ] Keep pathfinding queues, lot grids, simplification, and helper algorithms private.
 - [ ] Narrow `draxul-megacity-test-internals` after tests stop needing the broad product target.
@@ -35,7 +35,7 @@ model/layout/grid/routing implementation files and direct deterministic tests.
 - [ ] Pin deterministic lot/module/city placement and stable identity.
 - [ ] Pin grid rasterization and occupied/sidewalk/road classification.
 - [ ] Pin route ports, pathfinding, duplicate-name identity, and segment conversion.
-- [ ] Build `draxul-megacity-model` and `draxul-test-megacity`; run CTest label `megacity`.
+- [x] Build `draxul-megacity-model` and `draxul-test-megacity`; run CTest label `megacity`.
 - [ ] Add a public-header/link-isolation consumer for the model target.
 
 ## Cross-platform validation
@@ -44,19 +44,19 @@ model/layout/grid/routing implementation files and direct deterministic tests.
 - [ ] Confirm CPU outputs and ordering are identical for Vulkan and Metal consumers.
 - [ ] Preserve 16-bit downstream `GeometryMesh` index assumptions.
 - [ ] Run the existing MegaCity host/scene tests and launch the host on an available backend.
-- [ ] Record other-platform runtime validation if only one backend is available.
+- [x] Record other-platform runtime validation if only one backend is available. (Metal/Apple M5 passed; Vulkan/Windows remains.)
 
 ## Agent documentation and tooling
 
-- [ ] Update the core `docs/module-map.md` and `plugins/megacity/product/AGENTS.md` with the new direction.
-- [ ] Document that model code is synchronous, deterministic, backend-neutral, and host-thread agnostic.
-- [ ] Update focused Megacity validation commands to current target/CTest label names.
+- [x] Update the core `docs/module-map.md` and `plugins/megacity/product/AGENTS.md` with the new direction.
+- [x] Document that model code is synchronous, deterministic, backend-neutral, and host-thread agnostic.
+- [x] Update focused Megacity validation commands to current target/CTest label names.
 
 ## Acceptance criteria
 
-- [ ] `draxul-megacity-model` has no host, ImGui, SDL, font, Vulkan, or Metal dependency.
+- [x] `draxul-megacity-model` has no host, ImGui, SDL, font, Vulkan, or Metal dependency.
 - [ ] Model/layout/grid/routing tests link without the broad Megacity product/renderer closure.
-- [ ] One static link boundary is used; algorithms are not fragmented into micro-libraries.
+- [x] One static link boundary is used; algorithms are not fragmented into micro-libraries.
 - [ ] Semantic layout, routing, host behavior, and rendered scene inputs remain equivalent.
 - [ ] Focused/full tests, optional ON/OFF builds, and smoke pass.
 

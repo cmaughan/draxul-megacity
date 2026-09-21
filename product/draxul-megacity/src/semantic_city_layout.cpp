@@ -22,6 +22,46 @@
 namespace draxul
 {
 
+SemanticCityLayoutOptions semantic_city_layout_options_from_config(const MegaCityCodeConfig& config)
+{
+    return {
+        config.clamp_semantic_metrics,
+        config.hide_test_entities,
+        config.hide_struct_entities,
+        config.enable_struct_stacking,
+        config.struct_stack_max,
+        config.struct_stack_gap,
+        config.struct_brick_grid_size,
+        config.struct_brick_gap,
+        config.hide_function_entities,
+        config.functions_per_building_max,
+        config.height_multiplier,
+        config.placement_step,
+        config.max_spiral_rings,
+        config.footprint_base,
+        config.footprint_range,
+        config.footprint_unclamped_scale,
+        config.height_base,
+        config.height_mass_weight,
+        config.height_count_weight,
+        config.height_range,
+        config.height_unclamped_count_weight,
+        config.road_width_base,
+        config.road_width_scale,
+        config.road_width_range,
+        config.sidewalk_width,
+        config.dependency_route_layer_step,
+        config.park_footprint,
+        config.park_sidewalk_width,
+        config.park_road_width,
+        config.central_park_scale,
+        config.roof_sign_thickness,
+        config.sidewalk_surface_height,
+        config.sidewalk_surface_lift,
+        config.road_surface_height,
+    };
+}
+
 namespace
 {
 
@@ -1167,12 +1207,18 @@ std::vector<CityGrid::RoutePolyline> build_city_routes_from_grid(
             worker.join();
     }
 
-    std::vector<CityGrid::RoutePolyline> routes;
-    routes.reserve(route_pairs.size());
-    for (auto& route_result : route_results)
+    struct SuccessfulRoute
     {
+        size_t pair_index = 0;
+        CityGrid::RoutePolyline route;
+    };
+    std::vector<SuccessfulRoute> successful_routes;
+    successful_routes.reserve(route_pairs.size());
+    for (size_t pair_index = 0; pair_index < route_results.size(); ++pair_index)
+    {
+        auto& route_result = route_results[pair_index];
         if (route_result.has_value())
-            routes.push_back(std::move(*route_result));
+            successful_routes.push_back({ pair_index, std::move(*route_result) });
     }
 
     // Assign per-route stacked elevation so pick code can use it per-route.
@@ -1233,9 +1279,9 @@ std::vector<CityGrid::RoutePolyline> build_city_routes_from_grid(
     };
 
     std::unordered_map<std::string, int> side_layer_counters;
-    for (size_t ri = 0; ri < routes.size(); ++ri)
+    for (SuccessfulRoute& successful : successful_routes)
     {
-        auto& route = routes[ri];
+        auto& route = successful.route;
         if (route.world_points.size() < 2)
         {
             route.source_elevation = base_elev;
@@ -1255,14 +1301,17 @@ std::vector<CityGrid::RoutePolyline> build_city_routes_from_grid(
 
         // Resolve per-end elevations.  For the focused building, use the
         // specific layer height; for the other end use the fallback.
-        const auto& rp = route_pairs[ri];
+        const auto& rp = route_pairs[successful.pair_index];
         const float src_layer = resolve_layer_elev(rp.source, focus_function_name);
         const float tgt_layer = resolve_layer_elev(rp.target, focus_function_name);
 
         route.source_elevation = src_layer >= 0.0f ? src_layer : fallback_elev;
         route.target_elevation = tgt_layer >= 0.0f ? tgt_layer : fallback_elev;
     }
-
+    std::vector<CityGrid::RoutePolyline> routes;
+    routes.reserve(successful_routes.size());
+    for (auto& successful : successful_routes)
+        routes.push_back(std::move(successful.route));
     return routes;
 }
 
