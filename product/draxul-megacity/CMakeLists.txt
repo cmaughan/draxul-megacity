@@ -14,6 +14,7 @@ set(MEGACITY_SOURCES
     src/metrics_overlay_controller.cpp
     src/scene_snapshot_builder.cpp
     src/scene_publication.cpp
+    src/semantic_city_layout_adapter.cpp
     src/semantic_source_controller.cpp
     src/sign_label_atlas.cpp
     src/static_mesh_family_cache.cpp
@@ -60,4 +61,3 @@ add_library(draxul-megacity-test-internals INTERFACE)
 target_include_directories(draxul-megacity-test-internals INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(draxul-megacity-test-internals INTERFACE draxul-megacity)

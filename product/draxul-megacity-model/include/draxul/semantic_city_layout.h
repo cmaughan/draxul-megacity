@@ -3,11 +3,12 @@
 #include <draxul/codeviz_scene_components.h>
 
 #include <draxul/code_semantic_model.h>
-#include <draxul/megacity_code_config.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -31,7 +32,7 @@ struct SemanticCityLayoutOptions
     float struct_brick_gap = 0.05f;
     bool hide_function_entities = false;
     int functions_per_building_max = 100;
-    float height_multiplier = 1.0f;
+    float height_multiplier = 1.3f;
     float placement_step = 0.5f;
     int max_spiral_rings = 4096;
     float footprint_base = 2.2f;
@@ -51,14 +52,11 @@ struct SemanticCityLayoutOptions
     float park_sidewalk_width = 1.0f;
     float park_road_width = 1.0f;
     glm::vec2 central_park_scale{ 2.0f, 2.0f };
-    float roof_sign_thickness = 0.2f;
+    float roof_sign_thickness = 0.63f;
     float sidewalk_surface_height = 0.151f;
     float sidewalk_surface_lift = 0.136f;
-    float road_surface_height = 0.04f;
+    float road_surface_height = 0.025f;
 };
-
-[[nodiscard]] SemanticCityLayoutOptions semantic_city_layout_options_from_config(
-    const MegaCityCodeConfig& config);
 
 struct CityClassRecord
 {
@@ -266,30 +264,30 @@ struct SemanticMegacityLayout
 };
 
 [[nodiscard]] BuildingMetrics derive_building_metrics(
-    const CityClassRecord& row, const MegaCityCodeConfig& config);
+    const CityClassRecord& row, const SemanticCityLayoutOptions& config);
 [[nodiscard]] bool is_test_semantic_source(std::string_view source_file_path);
 [[nodiscard]] SemanticCityModuleModel build_semantic_city_model(
-    std::string_view module_path, const std::vector<CityClassRecord>& rows, const MegaCityCodeConfig& config);
+    std::string_view module_path, const std::vector<CityClassRecord>& rows, const SemanticCityLayoutOptions& config);
 [[nodiscard]] SemanticMegacityModel build_semantic_megacity_model(
-    const std::vector<SemanticCityModuleInput>& modules, const MegaCityCodeConfig& config);
+    const std::vector<SemanticCityModuleInput>& modules, const SemanticCityLayoutOptions& config);
 [[nodiscard]] std::array<RoadSegmentPlacement, 4> build_sidewalk_segments(
     const SemanticCityBuilding& building);
 [[nodiscard]] std::array<RoadSegmentPlacement, 4> build_road_segments(
     const SemanticCityBuilding& building);
 [[nodiscard]] float compute_module_border_width(
-    const SemanticCityModuleLayout& module_layout, const MegaCityCodeConfig& config);
+    const SemanticCityModuleLayout& module_layout, const SemanticCityLayoutOptions& config);
 [[nodiscard]] std::array<ModuleBoundarySignPlacement, 2> build_module_boundary_sign_placements(
-    const SemanticCityModuleLayout& module_layout, const MegaCityCodeConfig& config);
+    const SemanticCityModuleLayout& module_layout, const SemanticCityLayoutOptions& config);
 [[nodiscard]] CitySurfaceBounds compute_city_road_surface_bounds(
     const SemanticMegacityLayout& layout);
 [[nodiscard]] SemanticCityLayout build_semantic_city_layout(
-    const SemanticCityModuleModel& module_model, const MegaCityCodeConfig& config);
+    const SemanticCityModuleModel& module_model, const SemanticCityLayoutOptions& config);
 [[nodiscard]] SemanticCityLayout build_semantic_city_layout(
-    const std::vector<CityClassRecord>& rows, const MegaCityCodeConfig& config);
+    const std::vector<CityClassRecord>& rows, const SemanticCityLayoutOptions& config);
 [[nodiscard]] SemanticMegacityLayout build_semantic_megacity_layout(
-    const SemanticMegacityModel& model, const MegaCityCodeConfig& config);
+    const SemanticMegacityModel& model, const SemanticCityLayoutOptions& config);
 [[nodiscard]] SemanticMegacityLayout build_semantic_megacity_layout(
-    const std::vector<SemanticCityModuleInput>& modules, const MegaCityCodeConfig& config);
+    const std::vector<SemanticCityModuleInput>& modules, const SemanticCityLayoutOptions& config);
 
 // 2D occupancy grid for city overview and pathfinding.
 // Lives in the presentation model so both the ImGui panel and 3D scene can use it.
@@ -347,14 +345,14 @@ inline constexpr uint8_t kCityGridRoad = 3;
 inline constexpr uint8_t kCityGridPark = 4;
 
 [[nodiscard]] CityGrid build_city_grid(
-    const SemanticMegacityLayout& layout, const MegaCityCodeConfig& config);
+    const SemanticMegacityLayout& layout, const SemanticCityLayoutOptions& config);
 [[nodiscard]] CityGrid build_city_grid(
-    const SemanticMegacityLayout& layout, const SemanticMegacityModel& model, const MegaCityCodeConfig& config);
+    const SemanticMegacityLayout& layout, const SemanticMegacityModel& model, const SemanticCityLayoutOptions& config);
 [[nodiscard]] std::vector<CityGrid::RoutePolyline> build_city_routes(
-    const SemanticMegacityLayout& layout, const SemanticMegacityModel& model, const MegaCityCodeConfig& config);
+    const SemanticMegacityLayout& layout, const SemanticMegacityModel& model, const SemanticCityLayoutOptions& config);
 [[nodiscard]] std::vector<CityGrid::RoutePolyline> build_city_routes_for_selection(
     const SemanticMegacityLayout& layout, const SemanticMegacityModel& model, const CityGrid& grid,
-    const MegaCityCodeConfig& config,
+    const SemanticCityLayoutOptions& config,
     std::string_view focus_source_file_path,
     std::string_view focus_module_path,
     std::string_view focus_qualified_name,
