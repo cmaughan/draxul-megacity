@@ -41,7 +41,7 @@ model/layout/grid/routing implementation files and direct deterministic tests.
 ## Cross-platform validation
 
 - [x] Configure/build MegaCity ON and OFF on Windows.
-- [ ] Configure/build MegaCity ON and OFF on macOS.
+- [x] Configure/build MegaCity ON and OFF on macOS.
 - [x] Confirm CPU outputs and ordering are identical for Vulkan and Metal consumers: both backends consume the same backend-neutral model records.
 - [x] Preserve 16-bit downstream `GeometryMesh` index assumptions; the extraction does not change scene mesh records or geometry generation.
 - [x] Run the existing MegaCity host/scene tests and launch the host on an available backend.
@@ -62,7 +62,7 @@ model/layout/grid/routing implementation files and direct deterministic tests.
 - [x] One static link boundary is used; algorithms are not fragmented into micro-libraries.
 - [x] Semantic layout, routing, host behavior, and rendered scene inputs remain equivalent.
 - [x] Windows focused/full tests, optional ON/OFF builds, render, and smoke pass.
-- [ ] macOS focused tests, optional ON/OFF builds, render, and smoke pass.
+- [x] macOS focused tests, optional ON/OFF builds, render, and smoke pass.
 
 ## Dependencies and ownership
 
@@ -130,3 +130,30 @@ python3 do.py smoke debug --skip-build
 
 Inspect both City and Biology modes in the Metal render before ticking the two
 remaining macOS boxes and moving this card to done.
+
+## macOS validation checkpoint (2026-09-22)
+
+- A fresh `build-mac-megacity-on` Debug/Unix Makefiles cache configured with
+  render tests enabled, MegaCity ON, and every other product OFF. Building
+  `draxul`, `draxul-test-megacity-model`, `draxul-test-megacity`, and
+  `draxul-test-megacity-parser` passed. The isolated
+  `ctest -L megacity --output-on-failure --parallel 8` run then passed 4/4
+  entries in 4.15 seconds.
+- A fresh `build-mac-products-off` cache configured with MegaCity and every
+  other product OFF. Building `draxul` passed, and `cmake --build
+  build-mac-products-off --target help` contained no MegaCity targets.
+- Both Metal modes initialized and produced captures. City built the
+  deterministic semantic fixture (3 modules and 6 buildings); its inspected
+  `tests/render/out/megacity-plugin.macos.actual.bmp` matches the established
+  Windows composition. Biology built its deterministic tissue view (640 cells,
+  34 module tissues, and 20 vessels); the inspected
+  `tests/render/out/bioview-plugin.macos.actual.bmp` contains the expected
+  vessel/tissue geometry.
+- The reviewed Metal capture was accepted as
+  `tests/render/reference/megacity-plugin.macos.bmp`; the root render manifest
+  now enables the backend-neutral MegaCity scenario on Windows and macOS.
+  `CCACHE_DIR=/tmp/draxul-ccache python3 do.py blessmegacityplugin` produced the
+  960x640 reference, and the independent `python3 do.py megacityplugin` rerun
+  matched it exactly: 0/614400 changed pixels and zero channel delta.
+- The same-cache `CCACHE_DIR=/tmp/draxul-ccache python3 do.py smoke debug
+  --skip-build` passed. This completes the macOS acceptance gate.
