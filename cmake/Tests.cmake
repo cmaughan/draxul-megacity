@@ -15,10 +15,11 @@ target_compile_definitions(draxul-test-megacity-parser PRIVATE DRAXUL_ENABLE_MEG
 draxul_add_test_target(
     draxul-test-megacity megacity 2 ${_megacity_test_sources})
 target_link_libraries(draxul-test-megacity PRIVATE
+    draxul-config
     draxul-geometry
     draxul-megacity-test-internals
     draxul-codeviz-renderer-test-internals
-    draxul-host
+    draxul-host-api
     draxul-renderer)
 target_compile_definitions(draxul-test-megacity PRIVATE DRAXUL_ENABLE_MEGACITY)
 
