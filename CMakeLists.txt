@@ -108,9 +108,7 @@ set(_megacity_product_targets
     draxul-megacity
     draxul-megacity-plugin)
 foreach(_target IN LISTS _megacity_product_targets)
-    if(COMMAND draxul_apply_sanitizers)
-        draxul_apply_sanitizers(${_target})
-        draxul_apply_coverage(${_target})
+    if(COMMAND draxul_apply_msvc_parallel_pdb_fix)
         draxul_apply_msvc_parallel_pdb_fix(${_target})
     endif()
 endforeach()

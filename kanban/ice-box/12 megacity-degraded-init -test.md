@@ -49,7 +49,7 @@ Add to `tests/megacity_host_tests.cpp` (create if needed). Use a fake/stub rende
 
 ## Acceptance criteria
 
-- [ ] All three scenarios pass under ASan.
+- [ ] All three scenarios pass repeatedly with explicit ownership and shutdown assertions.
 - [ ] Tests are part of `draxul-tests` and do not require a real renderer or display.
 
 ## Interdependencies
