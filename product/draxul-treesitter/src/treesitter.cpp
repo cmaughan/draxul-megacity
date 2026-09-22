@@ -2,9 +2,10 @@
 #include <draxul/perf_timing.h>
 #include <draxul/treesitter.h>
 
+#include "source_parser.h"
+
 #include <cstring>
 #include <fstream>
-#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -432,6 +433,271 @@ void collect_type_references(TSNode node, const std::string& source, std::set<st
 
 // ---------------------------------------------------------------------------
 
+namespace detail
+{
+
+struct SourceParser::Impl
+{
+    TSParser* parser = nullptr;
+    TSQuery* query = nullptr;
+    TSQueryCursor* cursor = nullptr;
+    TSQuery* abstract_query = nullptr;
+    TSQueryCursor* abstract_cursor = nullptr;
+
+    explicit Impl(SourceParserOptions options)
+    {
+        if (!options.enable_parser)
+            return;
+
+        const TSLanguage* language = tree_sitter_cpp();
+        parser = ts_parser_new();
+        if (!parser || !language || !ts_parser_set_language(parser, language))
+            return;
+
+        uint32_t error_offset = 0;
+        TSQueryError error_type = TSQueryErrorNone;
+        if (options.enable_symbol_query)
+        {
+            query = ts_query_new(language, kCppQuery.data(),
+                static_cast<uint32_t>(kCppQuery.size()), &error_offset,
+                &error_type);
+            cursor = query ? ts_query_cursor_new() : nullptr;
+        }
+        if (options.enable_abstract_query)
+        {
+            abstract_query = ts_query_new(language, kAbstractQuery.data(),
+                static_cast<uint32_t>(kAbstractQuery.size()), &error_offset,
+                &error_type);
+            abstract_cursor = abstract_query ? ts_query_cursor_new() : nullptr;
+        }
+    }
+
+    ~Impl()
+    {
+        if (abstract_cursor)
+            ts_query_cursor_delete(abstract_cursor);
+        if (abstract_query)
+            ts_query_delete(abstract_query);
+        if (cursor)
+            ts_query_cursor_delete(cursor);
+        if (query)
+            ts_query_delete(query);
+        if (parser)
+            ts_parser_delete(parser);
+    }
+};
+
+SourceParser::SourceParser(SourceParserOptions options)
+    : impl_(std::make_unique<Impl>(options))
+{
+}
+
+SourceParser::~SourceParser() = default;
+
+SourceParseResult SourceParser::parse(
+    const std::string& source, std::string normalized_path)
+{
+    PERF_MEASURE();
+    if (!impl_ || !impl_->parser)
+        return {};
+
+    std::unique_ptr<TSTree, decltype(&ts_tree_delete)> tree(
+        ts_parser_parse_string(impl_->parser, nullptr, source.c_str(),
+            static_cast<uint32_t>(source.size())),
+        &ts_tree_delete);
+    if (!tree)
+        return {};
+
+    ParsedFile file;
+    file.path = std::move(normalized_path);
+    const TSNode root_node = ts_tree_root_node(tree.get());
+
+    if (ts_node_has_error(root_node))
+        collect_errors(root_node, file.errors);
+
+    if (impl_->query && impl_->cursor)
+    {
+        ts_query_cursor_exec(impl_->cursor, impl_->query, root_node);
+        TSQueryMatch match;
+        while (ts_query_cursor_next_match(impl_->cursor, &match))
+        {
+            for (uint32_t i = 0; i < match.capture_count; ++i)
+            {
+                const TSQueryCapture& cap = match.captures[i];
+                uint32_t name_len = 0;
+                const char* cap_name = ts_query_capture_name_for_id(
+                    impl_->query, cap.index, &name_len);
+
+                const uint32_t start_byte = ts_node_start_byte(cap.node);
+                const uint32_t end_byte = ts_node_end_byte(cap.node);
+                const uint32_t line = ts_node_start_point(cap.node).row + 1;
+                if (start_byte >= end_byte
+                    || end_byte > static_cast<uint32_t>(source.size()))
+                    continue;
+
+                std::string sym_name = source.substr(
+                    start_byte, end_byte - start_byte);
+                SymbolKind kind;
+                std::string parent_name;
+                uint32_t end_line = line;
+                uint32_t field_count = 0;
+                std::vector<std::string> referenced_types;
+                std::vector<SymbolRecord::FieldRecord> fields;
+                std::vector<std::string> inherited_types;
+                if (name_len == 2 && strncmp(cap_name, "fn", 2) == 0)
+                {
+                    kind = SymbolKind::Function;
+                    const TSNode function_node = find_ancestor_of_type(
+                        cap.node, "function_definition");
+                    if (ts_node_is_null(function_node) == 0)
+                        end_line = ts_node_end_point(function_node).row + 1;
+
+                    const TSNode enclosing_class = find_ancestor_of_type(
+                        cap.node, "class_specifier");
+                    const TSNode enclosing_struct = find_ancestor_of_type(
+                        cap.node, "struct_specifier");
+                    const TSNode owner_node
+                        = ts_node_is_null(enclosing_class) == 0
+                        ? enclosing_class
+                        : enclosing_struct;
+                    if (ts_node_is_null(owner_node) == 0)
+                        parent_name = class_name_from_node(source, owner_node);
+
+                    if (parent_name.empty()
+                        && strcmp(ts_node_type(cap.node),
+                               "qualified_identifier")
+                            == 0)
+                    {
+                        const size_t separator = sym_name.rfind("::");
+                        if (separator != std::string::npos)
+                        {
+                            parent_name = sym_name.substr(0, separator);
+                            sym_name = sym_name.substr(separator + 2);
+                        }
+                    }
+
+                    if (parent_name.empty()
+                        && ts_node_is_null(function_node) == 0)
+                    {
+                        fields = collect_parameter_records(
+                            function_node, source);
+                        field_count = static_cast<uint32_t>(fields.size());
+                        std::set<std::string> references;
+                        for (const auto& field : fields)
+                        {
+                            references.insert(field.referenced_types.begin(),
+                                field.referenced_types.end());
+                        }
+                        references.erase(sym_name);
+                        referenced_types.assign(
+                            references.begin(), references.end());
+                    }
+                }
+                else if (name_len == 3
+                    && strncmp(cap_name, "cls", 3) == 0)
+                {
+                    kind = SymbolKind::Class;
+                    const TSNode class_node = find_ancestor_of_type(
+                        cap.node, "class_specifier");
+                    if (ts_node_is_null(class_node) == 0)
+                    {
+                        if (!has_type_definition_body(class_node))
+                            continue;
+                        end_line = ts_node_end_point(class_node).row + 1;
+                        fields = collect_data_field_records(class_node, source);
+                        field_count = static_cast<uint32_t>(fields.size());
+                        std::set<std::string> references;
+                        collect_type_references(
+                            class_node, source, references);
+                        references.erase(sym_name);
+                        referenced_types.assign(
+                            references.begin(), references.end());
+                        inherited_types = collect_direct_base_type_names(
+                            class_node, source, sym_name);
+                    }
+                }
+                else if (name_len == 2
+                    && strncmp(cap_name, "st", 2) == 0)
+                {
+                    kind = SymbolKind::Struct;
+                    const TSNode struct_node = find_ancestor_of_type(
+                        cap.node, "struct_specifier");
+                    if (ts_node_is_null(struct_node) == 0)
+                    {
+                        if (!has_type_definition_body(struct_node))
+                            continue;
+                        end_line = ts_node_end_point(struct_node).row + 1;
+                        fields = collect_data_field_records(struct_node, source);
+                        field_count = static_cast<uint32_t>(fields.size());
+                        std::set<std::string> references;
+                        collect_type_references(
+                            struct_node, source, references);
+                        references.erase(sym_name);
+                        referenced_types.assign(
+                            references.begin(), references.end());
+                        inherited_types = collect_direct_base_type_names(
+                            struct_node, source, sym_name);
+                    }
+                }
+                else if (name_len == 3
+                    && strncmp(cap_name, "inc", 3) == 0)
+                {
+                    kind = SymbolKind::Include;
+                    sym_name = strip_include_delimiters(std::move(sym_name));
+                }
+                else
+                    continue;
+
+                SymbolRecord record;
+                record.kind = kind;
+                record.name = std::move(sym_name);
+                record.parent = std::move(parent_name);
+                record.line = line;
+                record.end_line = end_line;
+                record.field_count = field_count;
+                record.referenced_types = std::move(referenced_types);
+                record.fields = std::move(fields);
+                record.inherited_types = std::move(inherited_types);
+                file.symbols.push_back(std::move(record));
+            }
+        }
+    }
+
+    if (impl_->abstract_query && impl_->abstract_cursor)
+    {
+        std::unordered_set<std::string> abstract_names;
+        ts_query_cursor_exec(
+            impl_->abstract_cursor, impl_->abstract_query, root_node);
+        TSQueryMatch match;
+        while (ts_query_cursor_next_match(impl_->abstract_cursor, &match))
+        {
+            for (uint32_t i = 0; i < match.capture_count; ++i)
+            {
+                const TSQueryCapture& capture = match.captures[i];
+                const uint32_t start = ts_node_start_byte(capture.node);
+                const uint32_t end = ts_node_end_byte(capture.node);
+                if (start < end
+                    && end <= static_cast<uint32_t>(source.size()))
+                    abstract_names.insert(
+                        source.substr(start, end - start));
+            }
+        }
+        for (auto& symbol : file.symbols)
+        {
+            if ((symbol.kind == SymbolKind::Class
+                    || symbol.kind == SymbolKind::Struct)
+                && abstract_names.contains(symbol.name))
+                symbol.is_abstract = true;
+        }
+    }
+
+    return { SourceParseStatus::Success, std::move(file) };
+}
+
+} // namespace detail
+
+// ---------------------------------------------------------------------------
+
 CodebaseScanner::CodebaseScanner() = default;
 
 CodebaseScanner::~CodebaseScanner()
@@ -505,50 +771,7 @@ void CodebaseScanner::finish_progress(bool complete)
 void CodebaseScanner::scan_thread(std::filesystem::path root)
 {
     PERF_MEASURE();
-    const TSLanguage* lang = tree_sitter_cpp();
-
-    struct ParserResources
-    {
-        TSParser* parser = nullptr;
-        TSQuery* query = nullptr;
-        TSQueryCursor* cursor = nullptr;
-        TSQuery* abstract_query = nullptr;
-        TSQueryCursor* abstract_cursor = nullptr;
-
-        ~ParserResources()
-        {
-            if (abstract_cursor)
-                ts_query_cursor_delete(abstract_cursor);
-            if (abstract_query)
-                ts_query_delete(abstract_query);
-            if (cursor)
-                ts_query_cursor_delete(cursor);
-            if (query)
-                ts_query_delete(query);
-            if (parser)
-                ts_parser_delete(parser);
-        }
-    } resources;
-
-    TSParser* parser = resources.parser = ts_parser_new();
-    ts_parser_set_language(parser, lang);
-
-    uint32_t error_offset = 0;
-    TSQueryError error_type = TSQueryErrorNone;
-    TSQuery* query = resources.query = ts_query_new(
-        lang, kCppQuery.data(), static_cast<uint32_t>(kCppQuery.size()),
-        &error_offset, &error_type);
-    // query may be null if the grammar version is incompatible; we continue
-    // without symbol extraction but still count errors
-
-    TSQueryCursor* cursor = resources.cursor = query ? ts_query_cursor_new() : nullptr;
-
-    // Abstract-class detection is best-effort: if the grammar version doesn't
-    // support pure_specifier the query won't compile and we fall back gracefully.
-    TSQuery* abstract_query = resources.abstract_query = ts_query_new(
-        lang, kAbstractQuery.data(), static_cast<uint32_t>(kAbstractQuery.size()),
-        &error_offset, &error_type);
-    TSQueryCursor* abstract_cursor = resources.abstract_cursor = abstract_query ? ts_query_cursor_new() : nullptr;
+    detail::SourceParser parser;
 
     auto snapshot = std::make_shared<CodebaseSnapshot>();
     snapshot->scan_time = std::chrono::steady_clock::now();
@@ -594,189 +817,12 @@ void CodebaseScanner::scan_thread(std::filesystem::path root)
             static_cast<uint64_t>(source.size()),
             std::memory_order_relaxed);
 
-        // The synchronous parse operation owns no scanner state: it consumes
-        // source text and a normalized path, while reusing this scan's parser
-        // and query resources. Filesystem traversal and publication remain in
-        // CodebaseScanner.
-        const auto parse_source = [&]() -> std::optional<ParsedFile> {
-            std::unique_ptr<TSTree, decltype(&ts_tree_delete)> tree(
-                ts_parser_parse_string(
-                    parser, nullptr, source.c_str(),
-                    static_cast<uint32_t>(source.size())),
-                &ts_tree_delete);
-            if (!tree)
-                return std::nullopt;
-
-            ParsedFile file;
-            file.path = rel.generic_string();
-
-        const TSNode root_node = ts_tree_root_node(tree.get());
-
-        // Collect ERROR node positions for display in the UI.
-        if (ts_node_has_error(root_node))
-            collect_errors(root_node, file.errors);
-
-        if (query && cursor)
-        {
-            ts_query_cursor_exec(cursor, query, root_node);
-            TSQueryMatch match;
-            while (ts_query_cursor_next_match(cursor, &match))
-            {
-                for (uint32_t i = 0; i < match.capture_count; ++i)
-                {
-                    const TSQueryCapture& cap = match.captures[i];
-                    uint32_t name_len = 0;
-                    const char* cap_name = ts_query_capture_name_for_id(
-                        query, cap.index, &name_len);
-
-                    const uint32_t start_byte = ts_node_start_byte(cap.node);
-                    const uint32_t end_byte = ts_node_end_byte(cap.node);
-                    const uint32_t line = ts_node_start_point(cap.node).row + 1; // 1-based
-
-                    if (start_byte >= end_byte
-                        || end_byte > static_cast<uint32_t>(source.size()))
-                        continue;
-
-                    std::string sym_name = source.substr(start_byte, end_byte - start_byte);
-
-                    SymbolKind kind;
-                    std::string parent_name;
-                    uint32_t end_line = line;
-                    uint32_t field_count = 0;
-                    std::vector<std::string> referenced_types;
-                    std::vector<SymbolRecord::FieldRecord> fields;
-                    std::vector<std::string> inherited_types;
-                    if (name_len == 2 && strncmp(cap_name, "fn", 2) == 0)
-                    {
-                        kind = SymbolKind::Function;
-                        const TSNode function_node = find_ancestor_of_type(cap.node, "function_definition");
-                        if (ts_node_is_null(function_node) == 0)
-                            end_line = ts_node_end_point(function_node).row + 1;
-
-                        const TSNode enclosing_class = find_ancestor_of_type(cap.node, "class_specifier");
-                        const TSNode enclosing_struct = find_ancestor_of_type(cap.node, "struct_specifier");
-                        const TSNode owner_node = ts_node_is_null(enclosing_class) == 0 ? enclosing_class : enclosing_struct;
-                        if (ts_node_is_null(owner_node) == 0)
-                            parent_name = class_name_from_node(source, owner_node);
-
-                        // qualified_identifier nodes represent out-of-class method
-                        // definitions (e.g. "Foo::bar"). Split off the class prefix
-                        // so free functions and methods can be distinguished in the UI.
-                        if (parent_name.empty() && strcmp(ts_node_type(cap.node), "qualified_identifier") == 0)
-                        {
-                            const size_t sep = sym_name.rfind("::");
-                            if (sep != std::string::npos)
-                            {
-                                parent_name = sym_name.substr(0, sep);
-                                sym_name = sym_name.substr(sep + 2);
-                            }
-                        }
-
-                        // For free functions, extract parameter types as fields
-                        // so they participate in dependency routing.
-                        if (parent_name.empty() && ts_node_is_null(function_node) == 0)
-                        {
-                            fields = collect_parameter_records(function_node, source);
-                            field_count = static_cast<uint32_t>(fields.size());
-                            std::set<std::string> refs;
-                            for (const auto& f : fields)
-                                refs.insert(f.referenced_types.begin(), f.referenced_types.end());
-                            refs.erase(sym_name);
-                            referenced_types.assign(refs.begin(), refs.end());
-                        }
-                    }
-                    else if (name_len == 3 && strncmp(cap_name, "cls", 3) == 0)
-                    {
-                        kind = SymbolKind::Class;
-                        const TSNode class_node = find_ancestor_of_type(cap.node, "class_specifier");
-                        if (ts_node_is_null(class_node) == 0)
-                        {
-                            if (!has_type_definition_body(class_node))
-                                continue;
-                            end_line = ts_node_end_point(class_node).row + 1;
-                            fields = collect_data_field_records(class_node, source);
-                            field_count = static_cast<uint32_t>(fields.size());
-                            std::set<std::string> refs;
-                            collect_type_references(class_node, source, refs);
-                            refs.erase(sym_name);
-                            referenced_types.assign(refs.begin(), refs.end());
-                            inherited_types = collect_direct_base_type_names(class_node, source, sym_name);
-                        }
-                    }
-                    else if (name_len == 2 && strncmp(cap_name, "st", 2) == 0)
-                    {
-                        kind = SymbolKind::Struct;
-                        const TSNode struct_node = find_ancestor_of_type(cap.node, "struct_specifier");
-                        if (ts_node_is_null(struct_node) == 0)
-                        {
-                            if (!has_type_definition_body(struct_node))
-                                continue;
-                            end_line = ts_node_end_point(struct_node).row + 1;
-                            fields = collect_data_field_records(struct_node, source);
-                            field_count = static_cast<uint32_t>(fields.size());
-                            std::set<std::string> refs;
-                            collect_type_references(struct_node, source, refs);
-                            refs.erase(sym_name);
-                            referenced_types.assign(refs.begin(), refs.end());
-                            inherited_types = collect_direct_base_type_names(struct_node, source, sym_name);
-                        }
-                    }
-                    else if (name_len == 3 && strncmp(cap_name, "inc", 3) == 0)
-                    {
-                        kind = SymbolKind::Include;
-                        sym_name = strip_include_delimiters(std::move(sym_name));
-                    }
-                    else
-                        continue;
-
-                    SymbolRecord record;
-                    record.kind = kind;
-                    record.name = std::move(sym_name);
-                    record.parent = std::move(parent_name);
-                    record.is_abstract = false;
-                    record.line = line;
-                    record.end_line = end_line;
-                    record.field_count = field_count;
-                    record.referenced_types = std::move(referenced_types);
-                    record.fields = std::move(fields);
-                    record.inherited_types = std::move(inherited_types);
-                    file.symbols.push_back(std::move(record));
-                }
-            }
-        }
-
-        // Mark abstract classes using the optional abstract query.
-        if (abstract_query && abstract_cursor)
-        {
-            std::unordered_set<std::string> abstract_names;
-            ts_query_cursor_exec(abstract_cursor, abstract_query, root_node);
-            TSQueryMatch amatch;
-            while (ts_query_cursor_next_match(abstract_cursor, &amatch))
-            {
-                for (uint32_t i = 0; i < amatch.capture_count; ++i)
-                {
-                    const TSQueryCapture& cap = amatch.captures[i];
-                    const uint32_t s = ts_node_start_byte(cap.node);
-                    const uint32_t e = ts_node_end_byte(cap.node);
-                    if (s < e && e <= static_cast<uint32_t>(source.size()))
-                        abstract_names.insert(source.substr(s, e - s));
-                }
-            }
-            for (auto& sym : file.symbols)
-            {
-                if ((sym.kind == SymbolKind::Class || sym.kind == SymbolKind::Struct)
-                    && abstract_names.contains(sym.name))
-                    sym.is_abstract = true;
-            }
-        }
-
-            return file;
-        };
-        std::optional<ParsedFile> parsed_file = parse_source();
-        if (!parsed_file.has_value())
+        detail::SourceParseResult parsed = parser.parse(
+            source, rel.generic_string());
+        if (parsed.status == detail::SourceParseStatus::Skipped)
             continue;
         progress_source_files_parsed_.fetch_add(1, std::memory_order_relaxed);
-        snapshot->files.push_back(std::move(*parsed_file));
+        snapshot->files.push_back(std::move(parsed.file));
 
     }
 

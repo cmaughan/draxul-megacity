@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 add_library(draxul-treesitter STATIC
+    src/source_parser.h
     src/treesitter.cpp
 )
 
