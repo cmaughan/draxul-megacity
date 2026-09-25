@@ -4,6 +4,7 @@
 #include <draxul/plugin_host_services.h>
 #include <draxul/base_renderer.h>
 #include <draxul/codeviz_scene_pass.h>
+#include <draxul/config_document.h>
 #include <draxul/megacity_host.h>
 
 #include <nlohmann/json.hpp>
@@ -87,6 +88,7 @@ struct Instance
     Callbacks callbacks;
     std::unique_ptr<draxul::plugin_support::GpuImGuiHost> imgui;
     draxul::plugin_support::UiStyleClient ui_style;
+    draxul::ConfigDocument preferences;
     std::unique_ptr<draxul::MegaCityHost> host;
 #if !defined(__APPLE__)
     VmaAllocator allocator = VK_NULL_HANDLE;
@@ -136,11 +138,34 @@ void* create_instance(const DraxulPluginCreateInfoV2* info)
         : std::filesystem::path{};
     draxul::set_codeviz_product_root(directory);
     instance->services.emplace(*info);
+    const std::filesystem::path config_directory
+        = instance->services->path(DRAXUL_PLUGIN_PATH_CONFIG);
+    if (config_directory.empty())
+    {
+        instance->services->log(DRAXUL_PLUGIN_LOG_ERROR,
+            "MegaCity requires a writable plugin config directory for preferences");
+        return nullptr;
+    }
+    const std::filesystem::path preferences_path = config_directory
+        / (instance->mode == draxul::MegaCityVisualizationMode::Biology
+                ? "bioview-preferences.toml"
+                : "megacity-preferences.toml");
+    auto preferences = draxul::load_config_document_from_path_checked(
+        preferences_path);
+    if (!preferences)
+    {
+        instance->services->log(DRAXUL_PLUGIN_LOG_ERROR,
+            preferences.error().message);
+        return nullptr;
+    }
+    instance->preferences = std::move(*preferences);
     instance->ui_style.discover(*info->host);
     instance->imgui = draxul::plugin_support::create_gpu_imgui_host();
     instance->host = std::make_unique<draxul::MegaCityHost>(instance->mode);
+    instance->host->set_config_document_path(preferences_path);
 
     draxul::PluginRuntimeContext context;
+    context.config_document = &instance->preferences;
     context.launch_options.source_path = source;
     context.launch_options.request_continuous_refresh = continuous_refresh;
     context.launch_options.show_ui_panels = show_ui && instance->imgui;

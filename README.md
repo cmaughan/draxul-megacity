@@ -61,6 +61,11 @@ draxul tab create --space <space-id> --name BioView \
 
 `draxul pane split ... --plugin dev.draxul.megacity` works the same way for splitting an existing pane instead of creating a tab.
 
+Renderer, UI, and camera preferences are saved separately for City and BioView
+under the plugin's user configuration directory as `megacity-preferences.toml`
+and `bioview-preferences.toml`. They survive pane close/reopen and plugin reload;
+the plugin does not write these settings into Draxul's core `config.toml`.
+
 ## Facilities
 
 ### Scanning and semantics

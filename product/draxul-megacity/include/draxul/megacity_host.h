@@ -52,6 +52,7 @@ public:
     ~MegaCityHost();
 
     bool initialize(const PluginRuntimeContext& context, PluginRuntimeCallbacks& callbacks);
+    void set_config_document_path(std::filesystem::path path);
     // Stop background work while retaining GPU resources for safe retirement.
     void quiesce();
     void shutdown();
@@ -133,6 +134,7 @@ private:
     std::shared_ptr<const SemanticMegacityModel> semantic_model_;
     std::shared_ptr<const SemanticMegacityLayout> semantic_layout_;
     ConfigDocument* config_document_ = nullptr;
+    std::filesystem::path config_document_path_;
     MegaCityCodeConfig renderer_config_;
     MegaCityCodeConfig pending_renderer_config_;
     MegaCityCodeConfig renderer_defaults_;

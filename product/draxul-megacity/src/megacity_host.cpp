@@ -49,16 +49,22 @@ constexpr auto kDragSmoothingTick = std::chrono::milliseconds(8);
 
 void save_merged_megacity_config(
     ConfigDocument* config_document,
+    const std::filesystem::path& config_document_path,
     const MegaCityCodeConfig& current,
     const MegaCityCodeConfig& defaults)
 {
     if (!config_document)
         return;
 
-    ConfigDocument latest = ConfigDocument::load();
-    store_megacity_code_config(latest, current, defaults);
-    latest.save();
-    *config_document = std::move(latest);
+    auto latest = load_config_document_from_path_checked(config_document_path);
+    if (!latest)
+    {
+        DRAXUL_LOG_WARN(LogCategory::App, "%s", latest.error().message.c_str());
+        return;
+    }
+    store_megacity_code_config(*latest, current, defaults);
+    latest->save_to_path(config_document_path);
+    *config_document = std::move(*latest);
 }
 
 const SemanticCityBuilding* find_layout_building_for_route_debug(
@@ -430,7 +436,13 @@ MegaCityHost::MegaCityHost(MegaCityVisualizationMode mode)
     , camera_input_(std::make_unique<MegacityCameraInput>())
     , semantic_source_(std::make_unique<SemanticSourceController>())
     , metrics_overlay_(std::make_unique<MetricsOverlayController>())
+    , config_document_path_(ConfigDocument::default_path())
 {
+}
+
+void MegaCityHost::set_config_document_path(std::filesystem::path path)
+{
+    config_document_path_ = std::move(path);
 }
 
 MegaCityHost::~MegaCityHost()
@@ -1104,7 +1116,8 @@ void MegaCityHost::render_host_imgui(float dt)
         pending_renderer_config_ = renderer_controls.config;
         renderer_defaults_ = renderer_controls.defaults;
         auto persist_renderer_config = [&]() {
-            save_merged_megacity_config(config_document_, pending_renderer_config_, renderer_defaults_);
+            save_merged_megacity_config(config_document_, config_document_path_,
+                pending_renderer_config_, renderer_defaults_);
         };
         const bool pending_changed = previous_pending != pending_renderer_config_;
         const bool world_rebuild_needed = requires_world_rebuild(renderer_config_, pending_renderer_config_);
@@ -1198,7 +1211,8 @@ void MegaCityHost::shutdown()
     imgui_.destroy();
 
     pending_renderer_config_.show_ui_panels = show_ui_panels_;
-    save_merged_megacity_config(config_document_, pending_renderer_config_, renderer_defaults_);
+    save_merged_megacity_config(config_document_, config_document_path_,
+        pending_renderer_config_, renderer_defaults_);
     if (tooltip_text_service_)
     {
         tooltip_text_service_->shutdown();
