@@ -33,6 +33,6 @@ target_link_libraries(draxul-test-megacity PRIVATE
     draxul-renderer)
 target_compile_definitions(draxul-test-megacity PRIVATE DRAXUL_ENABLE_MEGACITY)
 
-add_dependencies(draxul-test-app draxul-megacity-plugin)
-target_compile_definitions(draxul-test-app PRIVATE
+add_dependencies(draxul-test-plugin-integration draxul-megacity-plugin)
+target_compile_definitions(draxul-test-plugin-integration PRIVATE
     DRAXUL_MEGACITY_PLUGIN_PATH="$<TARGET_FILE:draxul-megacity-plugin>")
