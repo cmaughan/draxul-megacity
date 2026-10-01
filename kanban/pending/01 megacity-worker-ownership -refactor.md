@@ -1,5 +1,7 @@
 # Own MegaCity grid and route workers privately
 
+**Summary:** Give MegaCity's background city-building and route tasks separate owners so cancellation and shutdown can be tested without exposing thread details throughout the host.
+
 **Priority:** P1 — two worker lifecycles crowd the public host header and timing tests.  
 **Source:** `plugins/megacity/product/draxul-megacity/include/draxul/megacity_host.h`  
 **Proposed by:** Claude 43; Codex 3. **Owner:** one MegaCity agent.  

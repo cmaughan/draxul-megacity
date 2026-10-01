@@ -1,5 +1,7 @@
 # Share MegaCity frame preparation and uniform layout
 
+**Summary:** Share MegaCity's preparation of camera, lighting, and material data so Windows and Mac drawing code use consistent calculations.
+
 **Priority:** P1 — Vulkan/Metal uniform records and CPU preparation duplicate shader-facing state.  
 **Source:** `plugins/megacity/product/draxul-codeviz-renderer/src/codeviz_render_vk.cpp`  
 **Proposed by:** Claude 24. **Owner:** one MegaCity renderer agent.  

@@ -1,5 +1,7 @@
 # Batch MegaCity Metal material texture preparation
 
+**Summary:** Prepare MegaCity's material images together on Mac so loading them does not stop and wait for the graphics card after each image.
+
 **Source:** `plugins/megacity/product/draxul-codeviz-renderer/src/codeviz_render.mm`  
 **Priority/evidence:** P2; static, medium-high confidence. **Reported by:** Claude. Lines 669–683 create, commit, and wait for a mip-generation command buffer per material texture during cold setup. Vulkan records equivalent preparation without a per-texture wait.
 

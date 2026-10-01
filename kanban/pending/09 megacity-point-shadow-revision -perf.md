@@ -1,5 +1,7 @@
 # Skip unchanged MegaCity point-shadow cube passes
 
+**Summary:** Reuse MegaCity's point-light shadows when their inputs are unchanged so moving only the camera does not redraw the same shadows.
+
 **Source:** `plugins/megacity/product/draxul-codeviz-renderer/src/codeviz_render_vk.cpp`  
 **Priority/evidence:** P2; static, medium confidence. **Reported by:** Claude. Lines 3572–3660 record valid cube faces every frame without a revision gate. Camera-only movement need not change fixed light/caster shadows; pass eligibility varies, so a universal draw-count multiplier is unsupported.
 

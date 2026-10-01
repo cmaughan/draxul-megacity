@@ -1,5 +1,7 @@
 # Isolate MegaCity geometry tests
 
+**Summary:** Run MegaCity's shape-generation tests separately so testing basic geometry does not require building the full host and renderer.
+
 **Priority:** P2 — pure geometry cases link the host and renderer suite.  
 **Source:** `plugins/megacity/cmake/Tests.cmake`  
 **Proposed by:** Claude 49, narrowed. **Owner:** one MegaCity test agent. **Depends on:** root card 02.  

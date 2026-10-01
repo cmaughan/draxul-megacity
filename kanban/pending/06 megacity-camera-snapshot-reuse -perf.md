@@ -1,5 +1,7 @@
 # Reuse MegaCity world records on camera-only frames
 
+**Summary:** Reuse MegaCity's existing world data when only the camera moves so panning and orbiting do not rebuild every object's description.
+
 **Source:** `plugins/megacity/product/draxul-megacity/src/megacity_host.cpp`  
 **Priority/evidence:** P2; static, high confidence. **Reported by:** Claude, Codex. Lines 1499–1505 mark the scene dirty on camera movement; 1559–1573 publish a full snapshot. `scene_snapshot_builder.cpp:245–338,464–493,536` revisits entities, material lookups, strings, and sort order during pan/orbit.
 

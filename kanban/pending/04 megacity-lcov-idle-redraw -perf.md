@@ -1,5 +1,7 @@
 # Stop idle redraw for static MegaCity LCOV coverage
 
+**Summary:** Stop redrawing MegaCity's static test-coverage display when nothing changes so it does not keep an otherwise idle view active.
+
 **Source:** `plugins/megacity/product/draxul-megacity/src/megacity_host.cpp`  
 **Priority/evidence:** P2; static, high confidence. **Reported by:** Claude. Lines 1886–1894 allow an active LCOV overlay to bypass idle return, then schedule the movement tick; `megacity_plugin.cpp:317–320` requests redraw for the deadline. LCOV import is static between explicit changes, while live perf overlays legitimately refresh.
 

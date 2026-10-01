@@ -1,5 +1,7 @@
 # Cull offscreen MegaCity objects before camera draws
 
+**Summary:** Skip drawing MegaCity objects outside the camera's view so larger worlds do not spend drawing time on things the user cannot see.
+
 **Source:** `plugins/megacity/product/draxul-megacity/src/scene_snapshot_builder.cpp`  
 **Priority/evidence:** P2; static, high confidence. **Reported by:** Codex. Lines 327–338 retain all renderables; Vulkan `codeviz_render_vk.cpp:3712–3718,3913–3925` and Metal `codeviz_render.mm:1700–1765` record camera-pass draws without frustum rejection. Hardware clipping comes after CPU recording and vertex work.
 

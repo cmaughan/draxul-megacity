@@ -1,5 +1,7 @@
 # Build MegaCity debug state only for consumers
 
+**Summary:** Prepare MegaCity's diagnostic information only when a panel needs it so collapsed panels do not repeatedly scan the model.
+
 **Source:** `plugins/megacity/product/draxul-megacity/src/megacity_host.cpp`  
 **Priority/evidence:** P2; static, medium-high confidence. **Reported by:** Claude, narrowed. Lines 1070–1085 already skip when UI panels are hidden, but visible collapsed panels still cause `metrics_overlay_controller.cpp:156–168` and `live_city_metrics.cpp:318–353` to traverse model/layers and construct keys. Debug data can be useful with overlay `None`.
 
