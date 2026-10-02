@@ -12,6 +12,7 @@
 #include <cstring>
 #include <draxul/log.h>
 #include <draxul/perf_timing.h>
+#include <draxul/plugin_imgui_context.h>
 #include <draxul/vulkan/vk_render_context.h>
 #include <imgui.h>
 #include <vector>
@@ -157,6 +158,7 @@ struct GBufferTargets
     VkFramebuffer scene_post_framebuffer = VK_NULL_HANDLE;
 
     // ImGui debug visualization descriptor sets (lazily registered)
+    ImGuiContext* imgui_texture_context = nullptr;
     VkDescriptorSet imgui_normal_ds = VK_NULL_HANDLE;
     VkDescriptorSet imgui_ao_raw_ds = VK_NULL_HANDLE;
     VkDescriptorSet imgui_ao_ds = VK_NULL_HANDLE;
@@ -2016,10 +2018,11 @@ struct CodeVizScenePass::State
     void destroy_gbuffer_targets()
     {
         PERF_MEASURE();
-        const bool can_remove_imgui_textures = ImGui::GetCurrentContext() != nullptr
-            && ImGui::GetIO().BackendRendererUserData != nullptr;
         for (auto& t : gbuffer_targets)
         {
+            plugin_support::ScopedImGuiContext owner_context(t.imgui_texture_context);
+            const bool can_remove_imgui_textures = t.imgui_texture_context != nullptr
+                && ImGui::GetIO().BackendRendererUserData != nullptr;
             if (t.imgui_normal_ds != VK_NULL_HANDLE)
             {
                 if (can_remove_imgui_textures)
@@ -4062,6 +4065,13 @@ void CodeVizScenePass::render_gbuffer_debug_ui()
     auto& t = state_->gbuffer_targets[fi];
     if (t.normal_view == VK_NULL_HANDLE)
         return;
+
+    if (ImGui::GetCurrentContext() == nullptr
+        || ImGui::GetIO().BackendRendererUserData == nullptr)
+        return;
+    if (t.imgui_texture_context == nullptr)
+        t.imgui_texture_context = ImGui::GetCurrentContext();
+    plugin_support::ScopedImGuiContext owner_context(t.imgui_texture_context);
 
     // Lazily register GBuffer textures with ImGui Vulkan backend
     if (t.imgui_normal_ds == VK_NULL_HANDLE)

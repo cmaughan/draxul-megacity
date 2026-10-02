@@ -1203,8 +1203,12 @@ void MegaCityHost::shutdown()
     semantic_layout_.reset();
     code_semantics_.reset();
 
-    // Destroy pass-owned Vulkan debug textures while this ImGui backend is still alive.
-    scene_pass_.reset();
+    // Select this pane before destroying pass-owned textures, while its backend
+    // is still alive. Another pane (including an unrendered one) may be current.
+    {
+        plugin_support::ScopedImGuiContext owner_context(imgui_.context());
+        scene_pass_.reset();
+    }
 
     // Tear down our own ImGui context (saves the docking ini, shuts the
     // backend down, then destroys the context).

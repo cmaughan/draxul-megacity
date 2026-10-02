@@ -393,9 +393,50 @@ TEST_CASE("megacity host destroys scene pass before shutting down its imgui back
     imgui_host.owner = &host;
     host.attach_imgui_host(imgui_host);
 
+    struct ObservedScenePass : CodeVizScenePass
+    {
+        ObservedScenePass(ImGuiContext*& observed_context, bool& observed_backend_alive,
+            ShutdownOrderImGuiHost& backend)
+            : CodeVizScenePass(1, 1, 1.0f)
+            , observed_context(observed_context)
+            , observed_backend_alive(observed_backend_alive)
+            , backend(backend)
+        {
+        }
+        ~ObservedScenePass() override
+        {
+            observed_context = ImGui::GetCurrentContext();
+            observed_backend_alive = !backend.shutdown_called;
+        }
+        ImGuiContext*& observed_context;
+        bool& observed_backend_alive;
+        ShutdownOrderImGuiHost& backend;
+    };
+    ImGuiContext* context_at_scene_destruction = nullptr;
+    bool backend_alive_at_scene_destruction = false;
+    host.scene_pass_ = std::make_unique<ObservedScenePass>(
+        context_at_scene_destruction, backend_alive_at_scene_destruction, imgui_host);
+    ImGuiContext* owner_context = host.imgui_.context();
+    plugin_support::PluginImGuiContext other_pane;
+    REQUIRE(other_pane.create());
+    ShutdownOrderImGuiHost other_backend;
+    SECTION("another rendered pane is current")
+    {
+        other_pane.attach_host(other_backend);
+    }
+    SECTION("an unrendered pane is current")
+    {
+        CHECK(ImGui::GetIO().BackendRendererUserData == nullptr);
+    }
+
     host.shutdown();
 
     CHECK_FALSE(imgui_host.scene_pass_alive_during_shutdown);
+    CHECK(context_at_scene_destruction == owner_context);
+    CHECK(backend_alive_at_scene_destruction);
+    CHECK(imgui_host.context_during_shutdown == owner_context);
+    CHECK(ImGui::GetCurrentContext() == other_pane.context());
+    other_pane.destroy();
 }
 
 TEST_CASE("megacity host source override controls the Tree-sitter scan root", "[megacity]")

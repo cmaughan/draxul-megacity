@@ -110,6 +110,8 @@ struct ShutdownOrderImGuiHost : IImGuiHost
 {
     MegaCityHost* owner = nullptr;
     bool scene_pass_alive_during_shutdown = false;
+    ImGuiContext* context_during_shutdown = nullptr;
+    bool shutdown_called = false;
 
     bool initialize_imgui_backend() override
     {
@@ -119,6 +121,8 @@ struct ShutdownOrderImGuiHost : IImGuiHost
     void shutdown_imgui_backend() override
     {
         scene_pass_alive_during_shutdown = owner && static_cast<bool>(owner->scene_pass_);
+        context_during_shutdown = ImGui::GetCurrentContext();
+        shutdown_called = true;
     }
 
     void rebuild_imgui_font_texture() override {}

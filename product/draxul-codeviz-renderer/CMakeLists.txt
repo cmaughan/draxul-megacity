@@ -42,6 +42,7 @@ target_link_libraries(draxul-codeviz-renderer
     PRIVATE
         Draxul::PluginSupport::Performance
         draxul-geometry
+        Draxul::PluginSupport::ImGui
         imgui
 )
 
