@@ -451,6 +451,51 @@ TEST_CASE("value noise is deterministic and bounded", "[geometry][cell]")
     CHECK(value_noise_3d(p, 42u) != Catch::Approx(value_noise_3d(p, 43u)));
 }
 
+TEST_CASE("value noise uses defined arithmetic at large and boundary coordinates", "[geometry][cell]")
+{
+    // Lattice coordinates beyond +/-29 used to overflow signed int in the hash
+    // products; default blob offsets and fBm octaves reach them routinely. The
+    // field must keep its historical (wrapped) values there, so pin a sample.
+    CHECK(value_noise_3d(glm::vec3(40.25f, -40.75f, 1000.5f), 42u) == Catch::Approx(0.0386750773f).margin(1e-5f));
+    CHECK(value_noise_3d(glm::vec3(-123456.5f, 98765.25f, -7.5f), 42u)
+        == Catch::Approx(0.00364885107f).margin(1e-5f));
+
+    // int32 boundaries and out-of-range magnitudes previously hit undefined
+    // float->int conversion and INT_MAX + 1 corner offsets.
+    const glm::vec3 extremes[] = {
+        glm::vec3(2147483520.0f, -2147483648.0f, 0.5f),
+        glm::vec3(3.0e9f, -3.0e9f, 1.0e30f),
+        glm::vec3(-1.0e30f, 1.0e20f, -2147483648.0f),
+    };
+    for (const glm::vec3& p : extremes)
+    {
+        const float a = value_noise_3d(p, 42u);
+        CHECK(std::isfinite(a));
+        CHECK(a >= -1.0f);
+        CHECK(a <= 1.0f);
+        CHECK(a == value_noise_3d(p, 42u));
+        const float f = fbm_noise_3d(p, 8, 42u);
+        CHECK(std::isfinite(f));
+        CHECK(f == fbm_noise_3d(p, 8, 42u));
+    }
+}
+
+TEST_CASE("default biology blob construction is deterministic", "[geometry][cell]")
+{
+    // Default params drive fBm well past the old signed-overflow threshold.
+    const BlobParams params;
+    const GeometryMesh a = build_blob_mesh(params);
+    const GeometryMesh b = build_blob_mesh(params);
+    check_mesh_valid(a);
+    REQUIRE(a.vertices.size() == b.vertices.size());
+    REQUIRE(a.indices == b.indices);
+    for (size_t i = 0; i < a.vertices.size(); ++i)
+    {
+        CHECK(a.vertices[i].position == b.vertices[i].position);
+        CHECK(a.vertices[i].color == b.vertices[i].color);
+    }
+}
+
 TEST_CASE("DNA double helix builds two backbones plus rungs", "[geometry][cell]")
 {
     DnaHelixParams params;

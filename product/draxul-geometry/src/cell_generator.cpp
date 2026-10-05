@@ -29,13 +29,31 @@ uint32_t hash_u32(uint32_t x)
     return x;
 }
 
-float lattice_value(int ix, int iy, int iz, uint32_t seed)
+// Lattice coordinates are carried as two's-complement bit patterns in uint32_t
+// so the coordinate products below (and the +1 corner offsets) wrap with
+// defined modular arithmetic instead of overflowing a signed int. For any
+// coordinate the old signed products produced the same bits whenever they did
+// not overflow, so existing noise fields are unchanged.
+float lattice_value(uint32_t ix, uint32_t iy, uint32_t iz, uint32_t seed)
 {
     uint32_t h = seed * 0x9e3779b1u;
-    h = hash_u32(h ^ static_cast<uint32_t>(ix * 73856093));
-    h = hash_u32(h ^ static_cast<uint32_t>(iy * 19349663));
-    h = hash_u32(h ^ static_cast<uint32_t>(iz * 83492791));
+    h = hash_u32(h ^ (ix * 73856093u));
+    h = hash_u32(h ^ (iy * 19349663u));
+    h = hash_u32(h ^ (iz * 83492791u));
     return static_cast<float>(h) / 2147483647.5f - 1.0f; // [-1, 1)
+}
+
+// Convert an already-floored float to its lattice coordinate without the
+// undefined float->int conversion for values outside int32 range (or NaN).
+uint32_t lattice_coord(float floored)
+{
+    constexpr float kMin = -2147483648.0f; // -2^31, exactly representable
+    constexpr float kMax = 2147483520.0f; // largest float below 2^31
+    if (!(floored >= kMin)) // also catches NaN
+        return std::isnan(floored) ? 0u : static_cast<uint32_t>(std::numeric_limits<int32_t>::min());
+    if (floored > kMax)
+        return static_cast<uint32_t>(std::numeric_limits<int32_t>::max());
+    return static_cast<uint32_t>(static_cast<int32_t>(floored));
 }
 
 float smootherstep(float t)
@@ -88,15 +106,15 @@ float value_noise_3d(const glm::vec3& p, uint32_t seed)
 {
     const glm::vec3 base = glm::floor(p);
     const glm::vec3 frac = p - base;
-    const int ix = static_cast<int>(base.x);
-    const int iy = static_cast<int>(base.y);
-    const int iz = static_cast<int>(base.z);
+    const uint32_t ix = lattice_coord(base.x);
+    const uint32_t iy = lattice_coord(base.y);
+    const uint32_t iz = lattice_coord(base.z);
 
     const float fx = smootherstep(frac.x);
     const float fy = smootherstep(frac.y);
     const float fz = smootherstep(frac.z);
 
-    auto corner = [&](int dx, int dy, int dz) {
+    auto corner = [&](uint32_t dx, uint32_t dy, uint32_t dz) {
         return lattice_value(ix + dx, iy + dy, iz + dz, seed);
     };
 
