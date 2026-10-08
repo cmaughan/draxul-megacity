@@ -215,7 +215,25 @@ struct CodeVizScenePass::State
     ObjCRef<id<MTLSamplerState>> material_sampler;
     std::array<ObjCRef<id<MTLTexture>>, kCodeVizMaterialTextureCount> material_textures;
     std::vector<GBufferTargets> gbuffer_targets; // per frame
+    // The frame's ImGui draw data is built before record_prepass and names
+    // target textures without retaining them. Keep replaced targets alive
+    // until this pass has prepared buffered_frame_count more frames.
+    struct RetiredGBufferTargets
+    {
+        std::vector<GBufferTargets> targets;
+        uint32_t prepasses_remaining = 0;
+    };
+    std::vector<RetiredGBufferTargets> retired_gbuffer_targets;
     bool gbuffer_initialized = false;
+
+    void age_retired_gbuffer_targets()
+    {
+        for (auto& retired : retired_gbuffer_targets)
+            --retired.prepasses_remaining;
+        std::erase_if(retired_gbuffer_targets, [](const RetiredGBufferTargets& retired) {
+            return retired.prepasses_remaining == 0;
+        });
+    }
     uint32_t last_prepass_frame = 0;
     NSUInteger scene_sample_count = 4;
     int shadow_map_resolution = 4096;
@@ -998,6 +1016,8 @@ struct CodeVizScenePass::State
             && gbuffer_targets[0].height == height)
             return true;
 
+        if (!gbuffer_targets.empty())
+            retired_gbuffer_targets.push_back({ std::move(gbuffer_targets), frame_count });
         gbuffer_targets.clear();
         gbuffer_targets.resize(frame_count);
 
@@ -1162,6 +1182,7 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
         return;
     if (!state_->ensure_frame_resources(cmd_buf.device, frame_count))
         return;
+    state_->age_retired_gbuffer_targets();
     if (!state_->ensure_gbuffer_targets(cmd_buf.device, frame_count, vw, vh))
         return;
     if (!state_->ensure_codeviz_material_library(cmd_buf))

@@ -304,6 +304,16 @@ struct CodeVizScenePass::State
     VkSampler shadow_compare_sampler = VK_NULL_HANDLE;
     std::array<ImageResource, kCodeVizMaterialTextureCount> material_textures;
     std::vector<GBufferTargets> gbuffer_targets;
+    // The frame's ImGui draw data is built before record_prepass, so a resize
+    // can replace targets whose debug descriptors it already references. Keep
+    // replaced sets until this pass has prepared buffered_frame_count more
+    // frames; by then the host has waited for that frame's slot.
+    struct RetiredGBufferTargets
+    {
+        std::vector<GBufferTargets> targets;
+        uint32_t prepasses_remaining = 0;
+    };
+    std::vector<RetiredGBufferTargets> retired_gbuffer_targets;
     bool gbuffer_initialized = false;
     uint32_t last_prepass_frame = 0;
     VkSampleCountFlagBits scene_sample_count = VK_SAMPLE_COUNT_1_BIT;
@@ -2018,7 +2028,39 @@ struct CodeVizScenePass::State
     void destroy_gbuffer_targets()
     {
         PERF_MEASURE();
-        for (auto& t : gbuffer_targets)
+        destroy_gbuffer_target_list(gbuffer_targets);
+    }
+
+    void retire_gbuffer_targets(uint32_t prepasses)
+    {
+        if (gbuffer_targets.empty())
+            return;
+        retired_gbuffer_targets.push_back({ std::move(gbuffer_targets), std::max(1u, prepasses) });
+        gbuffer_targets.clear();
+    }
+
+    void age_retired_gbuffer_targets()
+    {
+        for (auto& retired : retired_gbuffer_targets)
+        {
+            if (--retired.prepasses_remaining == 0)
+                destroy_gbuffer_target_list(retired.targets);
+        }
+        std::erase_if(retired_gbuffer_targets, [](const RetiredGBufferTargets& retired) {
+            return retired.prepasses_remaining == 0;
+        });
+    }
+
+    void destroy_retired_gbuffer_targets()
+    {
+        for (auto& retired : retired_gbuffer_targets)
+            destroy_gbuffer_target_list(retired.targets);
+        retired_gbuffer_targets.clear();
+    }
+
+    void destroy_gbuffer_target_list(std::vector<GBufferTargets>& targets)
+    {
+        for (auto& t : targets)
         {
             plugin_support::ScopedImGuiContext owner_context(t.imgui_texture_context);
             const bool can_remove_imgui_textures = t.imgui_texture_context != nullptr
@@ -2152,7 +2194,7 @@ struct CodeVizScenePass::State
             if (t.scene_final_image != VK_NULL_HANDLE)
                 vmaDestroyImage(allocator, t.scene_final_image, t.scene_final_alloc);
         }
-        gbuffer_targets.clear();
+        targets.clear();
     }
 
     void destroy_gbuffer()
@@ -2160,6 +2202,7 @@ struct CodeVizScenePass::State
         PERF_MEASURE();
         if (device == VK_NULL_HANDLE)
             return;
+        destroy_retired_gbuffer_targets();
         destroy_gbuffer_targets();
         if (gbuffer_sampler != VK_NULL_HANDLE)
             vkDestroySampler(device, gbuffer_sampler, nullptr);
@@ -2866,7 +2909,7 @@ struct CodeVizScenePass::State
 
         if (!gbuffer_targets.empty())
             wait_for_device_idle();
-        destroy_gbuffer_targets();
+        retire_gbuffer_targets(frame_count);
         gbuffer_targets.resize(frame_count);
 
         for (auto& t : gbuffer_targets)
@@ -3323,6 +3366,7 @@ void CodeVizScenePass::record_prepass(IRenderContext& ctx)
     const uint32_t frame_index = vk_ctx->frame_index();
     const uint32_t frame_count = std::max(1u, vk_ctx->buffered_frame_count());
 
+    state_->age_retired_gbuffer_targets();
     if (!state_->init_gbuffer())
         return;
     if (!state_->ensure_gbuffer_targets(frame_count, vw, vh))
