@@ -1,8 +1,7 @@
 # Make failed source scans recoverable
 **Summary:** Recover from a failed source scan so a temporary folder error cannot leave the view permanently waiting.
 
-**Priority:** 16  
-**Severity:** MEDIUM  
+**Priority:** P2  
 **Source:** `plugins/megacity/product/draxul-megacity/src/semantic_source_controller.cpp`  
 **Reported by:** Claude M12; consensus F50.
 

@@ -2,8 +2,7 @@
 
 **Summary:** Give pending sign-image uploads separate storage so quick color changes cannot replace pixels still being copied.
 
-**Priority:** 12  
-**Severity:** HIGH  
+**Priority:** P1  
 **Source:** `plugins/megacity/product/draxul-codeviz-renderer/src/codeviz_render_vk.cpp`
 
 **Evidence and trigger:** B21; same-sized atlas revisions overwrite shared staging while an earlier frame may still copy it.

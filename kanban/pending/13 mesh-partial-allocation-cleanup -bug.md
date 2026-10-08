@@ -2,8 +2,7 @@
 
 **Summary:** Release partially created drawing buffers when allocation fails so retries do not retain unused graphics memory.
 
-**Priority:** 13  
-**Severity:** MEDIUM  
+**Priority:** P2  
 **Source:** `plugins/megacity/product/draxul-codeviz-renderer/src/codeviz_vk_resources.cpp`
 
 **Evidence and trigger:** B30; vertex allocation survives failed index allocation and is lost by local foliage replacement handles.

@@ -1,8 +1,7 @@
 # Parse coverage function records correctly
 **Summary:** Read coverage records correctly so executed functions are not silently shown as uncovered.
 
-**Priority:** 15  
-**Severity:** MEDIUM  
+**Priority:** P2  
 **Source:** `plugins/megacity/product/draxul-megacity/src/lcov_coverage.cpp`  
 **Reported by:** Claude M11; consensus F49.
 

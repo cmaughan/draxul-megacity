@@ -1,8 +1,7 @@
 # Keep route results attached to the current city
 **Summary:** Keep routes tied to their city so rebuilding cannot restore an older grid.
 
-**Priority:** 14  
-**Severity:** HIGH  
+**Priority:** P1  
 **Source:** `plugins/megacity/product/draxul-megacity/src/megacity_host.cpp`  
 **Reported by:** Claude H4; consensus F25.
 
