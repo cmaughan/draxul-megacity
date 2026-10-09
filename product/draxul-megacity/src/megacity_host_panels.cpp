@@ -58,7 +58,6 @@ bool MegacityHostPanelFrame::panels_visible() const
 
 void MegacityHostPanelFrame::render_fixed_panels(
     CodeVizScenePass* scene_pass,
-    bool biology_view,
     const std::shared_ptr<const CityGrid>& grid,
     bool grid_build_in_progress)
 {
@@ -66,8 +65,7 @@ void MegacityHostPanelFrame::render_fixed_panels(
         return;
     if (scene_pass)
         scene_pass->render_gbuffer_debug_ui();
-    if (!biology_view)
-        render_city_map_panel(grid, grid_build_in_progress);
+    render_city_map_panel(grid, grid_build_in_progress);
 }
 
 void MegacityHostPanelFrame::finish()

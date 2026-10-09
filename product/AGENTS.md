@@ -4,7 +4,7 @@
 
 This guide applies to the product implementation under `plugins/megacity/product/` and supplements the repository-root `AGENTS.md`. Follow both; this file contains MegaCity-specific constraints.
 
-MegaCity/BioView is an optional dynamic product plugin, not a renderer demo or a core host. It must remain removable with `DRAXUL_ENABLE_MEGACITY=OFF`: production Draxul libraries and the executable must not acquire source, header, link, shader, or asset dependencies on this directory. Tests may link private product targets only inside the focused plugin suite.
+MegaCity is an optional dynamic product plugin, not a renderer demo or a core host. It must remain removable with `DRAXUL_ENABLE_MEGACITY=OFF`: production Draxul libraries and the executable must not acquire source, header, link, shader, or asset dependencies on this directory. Tests may link private product targets only inside the focused plugin suite.
 
 Do not use the MaaS MCP tools/servers for work in this module.
 
@@ -16,7 +16,7 @@ Do not use the MaaS MCP tools/servers for work in this module.
 - `draxul-codeviz-scene`: Backend-neutral scene records, presentation ECS world, and shared scene snapshot helpers consumed by code visualization renderers and hosts.
 - `draxul-codeviz-renderer`: Shared `CodeVizScenePass` plus Vulkan/Metal backends for code visualization scene snapshots.
 - `draxul-codeviz-host`: Shared camera and input helpers for code visualization hosts.
-- `draxul-megacity`: Host lifecycle, configuration, semantic layout, city and biology builders, scene snapshot construction, and ImGui panels. Push pure geometry, parsing, semantic-model, scene, camera/input, and rendering logic into the lower libraries above.
+- `draxul-megacity`: Host lifecycle, configuration, semantic layout, city builder, scene snapshot construction, and ImGui panels. Push pure geometry, parsing, semantic-model, scene, camera/input, and rendering logic into the lower libraries above.
 
 Keep the dependency direction approximately:
 
@@ -82,7 +82,7 @@ When diagnosing a failure, build `draxul-test-megacity` in that same cache and
 run its executable with a Catch2 name or tag filter; do not create a second
 Release cache for the focused rerun.
 
-Before completing MegaCity work, follow the root validation rules: build `draxul` and the focused tests, run smoke, and run relevant integration/render suites. Inspect both `{"mode":"city"}` and `{"mode":"biology"}` through plugin panes on the available platform. If only one platform is available, inspect the other backend carefully and state that runtime validation remains outstanding.
+Before completing MegaCity work, follow the root validation rules: build `draxul` and the focused tests, run smoke, and run relevant integration/render suites. Inspect City behavior through plugin panes on the available platform. If only one platform is available, inspect the other backend carefully and state that runtime validation remains outstanding.
 
 Add or update tests in the existing focused files under `plugins/megacity/tests/`, especially:
 

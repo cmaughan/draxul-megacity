@@ -36,7 +36,6 @@ public:
     bool panels_visible() const;
     void render_fixed_panels(
         CodeVizScenePass* scene_pass,
-        bool biology_view,
         const std::shared_ptr<const CityGrid>& grid,
         bool grid_build_in_progress);
     void finish();

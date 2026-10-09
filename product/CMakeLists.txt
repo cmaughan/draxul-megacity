@@ -1,4 +1,4 @@
-# MegaCity/BioView product implementation. Only the sibling dynamic module
+# MegaCity product implementation. Only the sibling dynamic module
 # links these libraries in production; Draxul core does not.
 
 add_subdirectory(draxul-geometry)

@@ -80,13 +80,6 @@ struct RegionSurfaceMetrics
     float height = 0.02f;
 };
 
-struct EllipsoidMetrics
-{
-    float radius_x = 0.5f;
-    float radius_y = 0.5f;
-    float radius_z = 0.5f;
-};
-
 struct LabelPanelMetrics
 {
     float width = 1.0f;

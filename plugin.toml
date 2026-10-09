@@ -1,6 +1,6 @@
 schema_version = 1
 id = "dev.draxul.megacity"
-name = "MegaCity / BioView"
+name = "MegaCity"
 version = "0.1.0"
 abi_version = 2
 

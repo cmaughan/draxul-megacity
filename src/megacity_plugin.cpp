@@ -80,7 +80,6 @@ struct Instance
     const DraxulPluginHostApiV2* api = nullptr;
     std::optional<draxul::plugin_support::HostServices> services;
     DraxulPluginViewportV2 viewport{};
-    draxul::MegaCityVisualizationMode mode = draxul::MegaCityVisualizationMode::City;
     bool visible = true;
     bool focused = false;
     bool quiesced = false;
@@ -128,9 +127,7 @@ void* create_instance(const DraxulPluginCreateInfoV2* info)
     {
         return nullptr;
     }
-    if (mode == "biology" || mode == "bioview")
-        instance->mode = draxul::MegaCityVisualizationMode::Biology;
-    else if (mode != "city" && mode != "megacity")
+    if (mode != "city" && mode != "megacity")
         return nullptr;
 
     const std::filesystem::path directory = info->plugin_directory_utf8
@@ -147,9 +144,7 @@ void* create_instance(const DraxulPluginCreateInfoV2* info)
         return nullptr;
     }
     const std::filesystem::path preferences_path = config_directory
-        / (instance->mode == draxul::MegaCityVisualizationMode::Biology
-                ? "bioview-preferences.toml"
-                : "megacity-preferences.toml");
+        / "megacity-preferences.toml";
     auto preferences = draxul::load_config_document_from_path_checked(
         preferences_path);
     if (!preferences)
@@ -161,7 +156,7 @@ void* create_instance(const DraxulPluginCreateInfoV2* info)
     instance->preferences = std::move(*preferences);
     instance->ui_style.discover(*info->host);
     instance->imgui = draxul::plugin_support::create_gpu_imgui_host();
-    instance->host = std::make_unique<draxul::MegaCityHost>(instance->mode);
+    instance->host = std::make_unique<draxul::MegaCityHost>();
     instance->host->set_config_document_path(preferences_path);
 
     draxul::PluginRuntimeContext context;
@@ -429,8 +424,7 @@ int32_t get_state(void* opaque, DraxulPluginPresentationStateV2* state)
         instance->status += " | hidden";
     const auto bg = instance->host ? instance->host->default_background()
         : draxul::Color{};
-    const std::string_view name = instance->mode == draxul::MegaCityVisualizationMode::Biology
-        ? std::string_view("BioView") : std::string_view("MegaCity");
+    constexpr std::string_view name = "MegaCity";
     *state = {};
     state->struct_size = sizeof(*state);
     state->display_name = { name.data(), name.size() };
@@ -460,7 +454,7 @@ using Presentation = draxul::plugin_support::PresentationAdapter<kActions,
     &get_state, &dispatch_action>;
 
 const DraxulPluginApiV2 kApi = draxul::plugin_support::make_plugin_api(
-    { kPluginId, "MegaCity / BioView", "0.1.0",
+    { kPluginId, "MegaCity", "0.1.0",
         draxul::plugin_support::kNativeBackendMask },
     {
         .create_instance = &create_instance,

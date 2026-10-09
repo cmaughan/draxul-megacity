@@ -27,7 +27,7 @@ public:
 
     void reset();
     void set_source_root(std::filesystem::path source_root);
-    void set_collection_enabled(bool biology_view, OverlayMode mode);
+    void set_collection_enabled(OverlayMode mode);
 
     void adopt_build_metrics(std::shared_ptr<const LiveCityMetricsSnapshot> metrics);
     bool refresh_live_metrics(

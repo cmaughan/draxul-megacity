@@ -230,30 +230,6 @@ entt::entity CodeVizSceneWorld::create_region_surface(float world_x, float world
     return entity;
 }
 
-entt::entity CodeVizSceneWorld::create_ellipsoid(float world_x, float world_z, float elevation,
-    const EllipsoidMetrics& metrics, const glm::vec4& color, CodeVizSemanticRef source,
-    std::shared_ptr<const GeometryMesh> custom_mesh, bool double_sided)
-{
-    PERF_MEASURE();
-    const auto entity = registry_.create();
-    registry_.emplace<WorldPosition>(entity, world_x, world_z);
-    registry_.emplace<Elevation>(entity, elevation);
-    registry_.emplace<EllipsoidMetrics>(entity, metrics);
-    const CodeVizMeshId mesh_id = custom_mesh ? CodeVizMeshId::Custom : CodeVizMeshId::Cube;
-    registry_.emplace<Appearance>(
-        entity,
-        mesh_id,
-        CodeVizMaterialPreset::FlatColor,
-        double_sided,
-        color,
-        glm::vec4(0.0f, 1.0f, 1.0f, 1.0f));
-    if (custom_mesh)
-        registry_.emplace<CustomMeshRef>(entity, std::move(custom_mesh), CustomMeshTransformMode::Baked);
-    if (!source.file.empty() || !source.name.empty())
-        registry_.emplace<CodeVizSemanticRef>(entity, std::move(source));
-    return entity;
-}
-
 entt::entity CodeVizSceneWorld::create_label_panel(float world_x, float world_z, float elevation,
     const LabelPanelMetrics& metrics, CodeVizMeshId mesh, const glm::vec4& color, CodeVizSemanticRef source,
     std::shared_ptr<const GeometryMesh> custom_mesh, CustomMeshTransformMode custom_mesh_transform_mode)

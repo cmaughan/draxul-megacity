@@ -1,4 +1,3 @@
-#include "biology_builder.h"
 #include "building_tooltip.h"
 #include "city_builder.h"
 #include "city_helpers.h"
@@ -414,26 +413,10 @@ const LiveCityFunctionMetric* find_function_metric(
     return nullptr;
 }
 
-bool is_biology_view(MegaCityVisualizationMode mode)
-{
-    return mode == MegaCityVisualizationMode::Biology;
-}
-
-const char* visualization_host_name(MegaCityVisualizationMode mode)
-{
-    return is_biology_view(mode) ? "bioview" : "megacity";
-}
-
-const char* visualization_log_name(MegaCityVisualizationMode mode)
-{
-    return is_biology_view(mode) ? "BioViewHost" : "MegaCityHost";
-}
-
 } // namespace
 
-MegaCityHost::MegaCityHost(MegaCityVisualizationMode mode)
-    : visualization_mode_(mode)
-    , camera_input_(std::make_unique<MegacityCameraInput>())
+MegaCityHost::MegaCityHost()
+    : camera_input_(std::make_unique<MegacityCameraInput>())
     , semantic_source_(std::make_unique<SemanticSourceController>())
     , metrics_overlay_(std::make_unique<MetricsOverlayController>())
     , config_document_path_(ConfigDocument::default_path())
@@ -533,7 +516,7 @@ bool MegaCityHost::initialize(const PluginRuntimeContext& context, PluginRuntime
             ? ConfigDocument::default_path().parent_path()
             : context.storage_directory;
         const std::filesystem::path ini_path = settings_root
-            / (is_biology_view(visualization_mode_) ? "bioview_imgui.ini" : "megacity_imgui.ini");
+            / "megacity_imgui.ini";
 
         plugin_support::PluginImGuiContext::Options imgui_options;
         imgui_options.ini_path = ini_path.string();
@@ -559,7 +542,7 @@ bool MegaCityHost::initialize(const PluginRuntimeContext& context, PluginRuntime
     last_activity_time_ = std::chrono::steady_clock::now();
     last_pump_time_ = last_activity_time_;
     metrics_overlay_->reset();
-    metrics_overlay_->set_collection_enabled(is_biology_view(visualization_mode_), renderer_config_.overlay_mode);
+    metrics_overlay_->set_collection_enabled(renderer_config_.overlay_mode);
 
     route_worker_stop_ = false;
     start_tree_sitter_semantic_source();
@@ -569,7 +552,7 @@ bool MegaCityHost::initialize(const PluginRuntimeContext& context, PluginRuntime
     mark_scene_dirty();
 
     DRAXUL_LOG_INFO(LogCategory::App, "%s initialized (%dx%d), scanning %s",
-        visualization_log_name(visualization_mode_), pixel_w_, pixel_h_, semantic_source_->root().string().c_str());
+        "MegaCityHost", pixel_w_, pixel_h_, semantic_source_->root().string().c_str());
     return true;
 }
 
@@ -1078,11 +1061,9 @@ void MegaCityHost::render_host_imgui(float dt)
         grid = city_grid_;
     }
     panel_frame.render_fixed_panels(
-        scene_pass_.get(), is_biology_view(visualization_mode_), grid, grid_build_in_progress_.load());
+        scene_pass_.get(), grid, grid_build_in_progress_.load());
 
-    const auto perf_debug = is_biology_view(visualization_mode_)
-        ? nullptr
-        : metrics_overlay_->build_debug_state(pending_renderer_config_.overlay_mode, semantic_model_.get());
+    const auto perf_debug = metrics_overlay_->build_debug_state(pending_renderer_config_.overlay_mode, semantic_model_.get());
 
     CodeVizRendererControls renderer_controls{
         .config = pending_renderer_config_,
@@ -1094,9 +1075,6 @@ void MegaCityHost::render_host_imgui(float dt)
     };
     const auto scanner_snapshot = semantic_source_->scanner_snapshot();
     const CodebaseScanProgress scanner_progress = semantic_source_->progress();
-    const CodeVisualizationPanelMode panel_mode = is_biology_view(visualization_mode_)
-        ? CodeVisualizationPanelMode::Biology
-        : CodeVisualizationPanelMode::City;
     if (render_treesitter_panel(
             viewport_.pixel_pos.x,
             viewport_.pixel_pos.y,
@@ -1105,9 +1083,7 @@ void MegaCityHost::render_host_imgui(float dt)
             scanner_snapshot,
             scanner_progress,
             semantic_model_.get(),
-            code_semantics_.get(),
-            &renderer_controls,
-            panel_mode))
+            &renderer_controls))
     {
         if (renderer_controls.reset_camera_requested)
             reset_camera_to_default_frame();
@@ -1227,7 +1203,7 @@ void MegaCityHost::shutdown()
         sign_text_service_->shutdown();
         sign_text_service_.reset();
     }
-    metrics_overlay_->set_collection_enabled(true, OverlayMode::None);
+    metrics_overlay_->set_collection_enabled(OverlayMode::None);
     sign_label_atlas_.reset();
     metrics_overlay_->reset();
     semantic_model_.reset();
@@ -1292,52 +1268,27 @@ void MegaCityHost::rebuild_semantic_city()
     std::shared_ptr<SignLabelAtlas> result_sign_label_atlas;
     std::shared_ptr<SemanticMegacityLayout> result_semantic_layout;
 
-    if (is_biology_view(visualization_mode_))
-    {
-        BiologyBuildResult result = build_biology_view(
-            *world_,
-            *code_semantics_,
-            renderer_config_);
-        foliage_stem_mesh_.reset();
-        foliage_card_mesh_.reset();
-        result_bounds_valid = result.bounds_valid;
-        result_min_x = result.min_x;
-        result_max_x = result.max_x;
-        result_min_z = result.min_z;
-        result_max_z = result.max_z;
-        result_computed_default_light = result.computed_default_light;
-        result_default_light_x = result.default_light_x;
-        result_default_light_y = result.default_light_y;
-        result_default_light_z = result.default_light_z;
-        result_default_light_radius = result.default_light_radius;
-        result_semantic_model.reset();
-        result_live_metrics.reset();
-    }
-    else
-    {
-        CityBuildResult result = build_city(
-            *world_, *code_semantics_, sign_text_service_.get(),
-            renderer_config_, sign_label_revision_);
-        foliage_stem_mesh_ = result.foliage_stem_mesh;
-        foliage_card_mesh_ = result.foliage_card_mesh;
-        result_bounds_valid = result.city_bounds_valid;
-        result_min_x = result.min_x;
-        result_max_x = result.max_x;
-        result_min_z = result.min_z;
-        result_max_z = result.max_z;
-        result_computed_default_light = result.computed_default_light;
-        result_default_light_x = result.default_light_x;
-        result_default_light_y = result.default_light_y;
-        result_default_light_z = result.default_light_z;
-        result_default_light_radius = result.default_light_radius;
-        result_semantic_model = std::move(result.semantic_model);
-        result_live_metrics = std::move(result.live_metrics);
-        result_sign_label_atlas = std::move(result.sign_label_atlas);
-        result_semantic_layout = result.layout
-            ? std::make_shared<SemanticMegacityLayout>(*result.layout)
-            : nullptr;
-    }
-
+    CityBuildResult result = build_city(
+        *world_, *code_semantics_, sign_text_service_.get(),
+        renderer_config_, sign_label_revision_);
+    foliage_stem_mesh_ = result.foliage_stem_mesh;
+    foliage_card_mesh_ = result.foliage_card_mesh;
+    result_bounds_valid = result.city_bounds_valid;
+    result_min_x = result.min_x;
+    result_max_x = result.max_x;
+    result_min_z = result.min_z;
+    result_max_z = result.max_z;
+    result_computed_default_light = result.computed_default_light;
+    result_default_light_x = result.default_light_x;
+    result_default_light_y = result.default_light_y;
+    result_default_light_z = result.default_light_z;
+    result_default_light_radius = result.default_light_radius;
+    result_semantic_model = std::move(result.semantic_model);
+    result_live_metrics = std::move(result.live_metrics);
+    result_sign_label_atlas = std::move(result.sign_label_atlas);
+    result_semantic_layout = result.layout
+        ? std::make_shared<SemanticMegacityLayout>(*result.layout)
+        : nullptr;
     // Apply presentation bounds.
     city_bounds_valid_ = result_bounds_valid;
     if (city_bounds_valid_)
@@ -1491,7 +1442,7 @@ void MegaCityHost::pump()
     const auto now = std::chrono::steady_clock::now();
     const float dt = std::chrono::duration<float>(now - last_pump_time_).count();
     last_imgui_delta_seconds_ = dt;
-    metrics_overlay_->set_collection_enabled(is_biology_view(visualization_mode_), renderer_config_.overlay_mode);
+    metrics_overlay_->set_collection_enabled(renderer_config_.overlay_mode);
     if (camera_)
     {
         const MegacityCameraInputFrame input_frame = camera_input_->update(dt, world_span_, *camera_);
@@ -1525,12 +1476,12 @@ void MegaCityHost::pump()
         const auto layout_ms = std::chrono::duration<double, std::milli>(layout_end - layout_start).count();
         DRAXUL_LOG_INFO(LogCategory::App,
             "%s: built Tree-sitter semantic snapshot (%zu files, %zu modules)",
-            visualization_log_name(visualization_mode_),
+            "MegaCityHost",
             source_update->parsed_snapshot->files.size(),
             source_update->available_modules.size());
         DRAXUL_LOG_DEBUG(LogCategory::App,
             "%s: scan %.0fms, semantic snapshot %.0fms, presentation %.0fms",
-            visualization_log_name(visualization_mode_),
+            "MegaCityHost",
             source_update->scan_ms,
             source_update->semantic_ms,
             layout_ms);
@@ -1538,8 +1489,7 @@ void MegaCityHost::pump()
 
     consume_completed_routes();
 
-    if (!is_biology_view(visualization_mode_)
-        && metrics_overlay_->refresh_live_metrics(now, renderer_config_.overlay_mode, semantic_model_.get()))
+    if (metrics_overlay_->refresh_live_metrics(now, renderer_config_.overlay_mode, semantic_model_.get()))
         mark_scene_dirty();
 
     if (!selected_building_name_.empty() && semantic_layout_ && semantic_model_
@@ -1893,7 +1843,7 @@ std::optional<std::chrono::steady_clock::time_point> MegaCityHost::next_deadline
         return std::nullopt;
     if (camera_input_->drag_smoothing_active())
         return std::chrono::steady_clock::now() + kDragSmoothingTick;
-    if (!is_biology_view(visualization_mode_) && is_live_perf_overlay(renderer_config_.overlay_mode))
+    if (is_live_perf_overlay(renderer_config_.overlay_mode))
         return std::chrono::steady_clock::now() + MetricsOverlayController::refresh_interval();
     return std::chrono::steady_clock::now() + kMovementTick;
 }
@@ -1927,7 +1877,7 @@ void MegaCityHost::request_close()
 
 std::string MegaCityHost::status_text() const
 {
-    std::string status = visualization_host_name(visualization_mode_);
+    std::string status = "megacity";
     if (semantic_source_ && semantic_source_->started()
         && !semantic_source_->ready())
         return status + " | scanning";
@@ -1939,8 +1889,6 @@ std::string MegaCityHost::status_text() const
 
 Color MegaCityHost::default_background() const
 {
-    if (is_biology_view(visualization_mode_))
-        return Color(0.035f, 0.055f, 0.045f, 1.0f);
     return Color(0.05f, 0.05f, 0.10f, 1.0f);
 }
 
@@ -1955,7 +1903,7 @@ PluginRuntimeState MegaCityHost::runtime_state() const
 PluginDebugState MegaCityHost::debug_state() const
 {
     PluginDebugState s;
-    s.name = visualization_host_name(visualization_mode_);
+    s.name = "megacity";
     s.grid_cols = 0;
     s.grid_rows = 0;
     s.dirty_cells = scene_dirty_ ? 1u : 0u;

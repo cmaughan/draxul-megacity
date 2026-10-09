@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
 set(MEGACITY_SOURCES
-    src/biology_builder.cpp
     src/building_tooltip.cpp
     src/city_builder.cpp
     src/city_picking.cpp

@@ -36,19 +36,13 @@ class IImGuiHost;
 class TextService;
 class ConfigDocument;
 
-enum class MegaCityVisualizationMode
-{
-    City,
-    Biology,
-};
-
 // MegaCityHost is a non-terminal host that renders a small 3D scene directly
 // into the GPU render pass. It does not use the grid path, but it does use the
 // font pipeline for semantic-city rooftop labels.
 class MegaCityHost final
 {
 public:
-    explicit MegaCityHost(MegaCityVisualizationMode mode = MegaCityVisualizationMode::City);
+    MegaCityHost();
     ~MegaCityHost();
 
     bool initialize(const PluginRuntimeContext& context, PluginRuntimeCallbacks& callbacks);
@@ -116,7 +110,6 @@ private:
     void sync_camera_state_to_configs();
     void reset_camera_to_default_frame();
 
-    MegaCityVisualizationMode visualization_mode_ = MegaCityVisualizationMode::City;
     std::unique_ptr<MegacityCameraInput> camera_input_;
     PluginRuntimeCallbacks* callbacks_ = nullptr;
     PluginRuntimeViewport viewport_;

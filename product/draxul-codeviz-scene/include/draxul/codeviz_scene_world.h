@@ -55,11 +55,6 @@ public:
     entt::entity create_region_surface(float world_x, float world_z, const RegionSurfaceMetrics& metrics,
         const glm::vec4& color, CodeVizSemanticRef source = {}, float elevation = 0.0f);
 
-    // Create an ellipsoid centered horizontally at the given position.
-    entt::entity create_ellipsoid(float world_x, float world_z, float elevation,
-        const EllipsoidMetrics& metrics, const glm::vec4& color, CodeVizSemanticRef source = {},
-        std::shared_ptr<const GeometryMesh> custom_mesh = nullptr, bool double_sided = false);
-
     // Create a label panel entity at the given world-space center position.
     entt::entity create_label_panel(float world_x, float world_z, float elevation,
         const LabelPanelMetrics& metrics, CodeVizMeshId mesh, const glm::vec4& color, CodeVizSemanticRef source = {},

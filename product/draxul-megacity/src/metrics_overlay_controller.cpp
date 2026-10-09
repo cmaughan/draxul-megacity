@@ -112,9 +112,9 @@ void MetricsOverlayController::set_source_root(std::filesystem::path source_root
     lcov_lookup_.reset();
 }
 
-void MetricsOverlayController::set_collection_enabled(bool biology_view, OverlayMode mode)
+void MetricsOverlayController::set_collection_enabled(OverlayMode mode)
 {
-    runtime_perf_collector().set_enabled(!biology_view && is_live_perf_overlay(mode));
+    runtime_perf_collector().set_enabled(is_live_perf_overlay(mode));
 }
 
 void MetricsOverlayController::adopt_build_metrics(std::shared_ptr<const LiveCityMetricsSnapshot> metrics)

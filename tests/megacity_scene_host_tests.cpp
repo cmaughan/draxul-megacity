@@ -597,59 +597,6 @@ TEST_CASE("megacity host treats stale graphify config as Tree-sitter source", "[
     host.shutdown();
 }
 
-TEST_CASE("bioview host builds from neutral semantics without a city model", "[megacity][bioview][treesitter]")
-{
-    tests::TempDir temp("draxul-bioview-semantic-source-state");
-    const auto scan_root = temp.path / "src";
-    std::filesystem::create_directories(scan_root);
-    {
-        std::ofstream out(scan_root / "widget.cpp", std::ios::trunc);
-        out << "struct WidgetConfig { int value; };\n"
-            << "class Widget { WidgetConfig config_; void draw(); };\n"
-            << "void Widget::draw() {}\n";
-    }
-
-    tests::FakeWindow window;
-    tests::PluginRuntimeTestCallbacks callbacks;
-    TextService text_service;
-    tests::FakeTermRenderer renderer;
-    MegaCityHost host(MegaCityVisualizationMode::Biology);
-
-    auto launch = megacity_test_launch_options();
-    launch.source_path = temp.path.string();
-
-    PluginRuntimeViewport viewport;
-    viewport.pixel_size = { 800, 600 };
-    viewport.grid_size = { 1, 1 };
-
-    PluginRuntimeContext context{
-        .text_service = &text_service,
-        .launch_options = std::move(launch),
-        .initial_viewport = viewport,
-        .display_ppi = window.display_ppi_,
-    };
-
-    REQUIRE(host.initialize(context, callbacks));
-    const auto snapshot = wait_for_complete_snapshot(*host.semantic_source_);
-    REQUIRE(snapshot);
-    REQUIRE(snapshot->complete);
-
-    host.pump();
-
-    CHECK(host.semantic_source_->ready());
-    REQUIRE(host.code_semantics_ != nullptr);
-    CHECK(host.code_semantics_->complete);
-    CHECK(host.semantic_source_->available_modules() == std::vector<std::string>{ "src" });
-    CHECK(host.semantic_model_ == nullptr);
-    CHECK(host.semantic_layout_ == nullptr);
-    CHECK(host.city_grid_ == nullptr);
-    REQUIRE(host.world_ != nullptr);
-    auto ellipsoid_view = host.world_->registry().view<const EllipsoidMetrics>();
-    CHECK(ellipsoid_view.begin() != ellipsoid_view.end());
-
-    host.shutdown();
-}
-
 TEST_CASE("megacity host retries focused routes once the grid becomes available", "[megacity]")
 {
     tests::FakeWindow window;

@@ -14,7 +14,7 @@
 **Unit tests**
 - [ ] Inject blocked builders for cancellation/latest-result/shutdown; retain host integration.
 **Cross-platform validation**
-- [ ] Check Windows/macOS thread teardown, `do.py test debug --megacity`, same-cache smoke and city/biology panes.
+- [ ] Check Windows/macOS thread teardown, `do.py test debug --megacity`, same-cache smoke and City panes.
 **Agent documentation and tooling**
 - [ ] Update MegaCity guide at product root and focused test descriptions.
 **Acceptance criteria**

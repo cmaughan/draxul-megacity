@@ -4,7 +4,6 @@
 
 #ifdef DRAXUL_ENABLE_MEGACITY
 
-#include "biology_builder.h"
 #include "codebase_snapshot_wait.h"
 #include "city_builder.h"
 #include "city_helpers.h"

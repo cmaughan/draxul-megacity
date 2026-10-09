@@ -2,7 +2,7 @@
 
 MegaCity is a native product plugin for [Draxul](https://github.com/cmaughan/Draxul), a cross-platform GPU terminal and agentic shell host. It scans a source tree with Tree-sitter, projects the parsed symbols into a semantic model of the codebase, and renders that model as an explorable 3D scene inside a Draxul pane — a city whose districts and buildings map to modules and types, with dependency routes, live performance heat, and test-coverage overlays layered on top. Its purpose is agent management and code analysis: a way to see and navigate what a codebase (and the agents working on it) are doing, not a rendering demo.
 
-The plugin is loaded at runtime as a dynamic module (`dev.draxul.megacity`) over Draxul's versioned C plugin ABI, rendering with raw Vulkan on Windows and raw Metal on macOS. One plugin ships two visualization modes built on the same scanning, semantics, and scene infrastructure: **City** and **BioView**.
+The plugin is loaded at runtime as a dynamic module (`dev.draxul.megacity`) over Draxul's versioned C plugin ABI, rendering with raw Vulkan on Windows and raw Metal on macOS. The City visualization uses plugin-owned scanning, semantics, and scene infrastructure.
 
 ![MegaCity city view beside the source it visualizes](screenshots/city_hero_mac.png)
 
@@ -45,25 +45,24 @@ From a running Draxul instance:
 draxul tab create --space <space-id> --name MegaCity --plugin dev.draxul.megacity --json
 ```
 
-Mode and scan source are selected through the plugin config JSON (`--plugin-config`):
+The scan source and launch options are selected through the plugin config JSON (`--plugin-config`):
 
 ```text
-draxul tab create --space <space-id> --name BioView \
-  --plugin dev.draxul.megacity --plugin-config '{"mode":"biology"}' --json
+draxul tab create --space <space-id> --name MegaCity \
+  --plugin dev.draxul.megacity --plugin-config '{"mode":"city"}' --json
 ```
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `mode` | `"city"` | `"city"` (alias `"megacity"`) or `"biology"` (alias `"bioview"`); any other value fails instance creation |
+| `mode` | `"city"` | `"city"` (alias `"megacity"`); any other value fails instance creation |
 | `source` | none | Path used as the Tree-sitter scan root |
 | `continuous_refresh` | `false` | Request continuous refresh from the host |
 | `show_ui` | `true` | Show the plugin's ImGui panels |
 
 `draxul pane split ... --plugin dev.draxul.megacity` works the same way for splitting an existing pane instead of creating a tab.
 
-Renderer, UI, and camera preferences are saved separately for City and BioView
-under the plugin's user configuration directory as `megacity-preferences.toml`
-and `bioview-preferences.toml`. They survive pane close/reopen and plugin reload;
+Renderer, UI, and camera preferences are saved under the plugin's user
+configuration directory as `megacity-preferences.toml`. They survive pane close/reopen and plugin reload;
 the plugin does not write these settings into Draxul's core `config.toml`.
 
 ## Facilities
@@ -71,7 +70,7 @@ the plugin does not write these settings into Draxul's core `config.toml`.
 ### Scanning and semantics
 
 - A background Tree-sitter scanner (`product/draxul-treesitter`) parses the configured source root and publishes immutable parsed-symbol snapshots. The C++ grammar is bundled; tree-sitter and the grammar are fetched by `cmake/Dependencies.cmake`.
-- `product/draxul-code-semantics` projects the raw parse into a neutral `CodeSemanticSnapshot` — repository, module, file, type, function, method, field, and reference nodes — and resolves repository module paths (so `app/...`, `libs/<name>/...`, `modules/<name>/...` become distinct modules). Both visualization modes build from this same snapshot.
+- `product/draxul-code-semantics` projects the raw parse into a neutral `CodeSemanticSnapshot` — repository, module, file, type, function, method, field, and reference nodes — and resolves repository module paths (so `app/...`, `libs/<name>/...`, `modules/<name>/...` become distinct modules). The City builder consumes this snapshot.
 - The presentation side uses an EnTT-based ECS world (`product/draxul-codeviz-scene`) with backend-neutral scene records and immutable scene snapshots handed from builder threads to the renderer.
 
 ### City mode
@@ -83,10 +82,6 @@ Analysis overlays include:
 - **Perf**: buildings blend toward a green-to-red heat palette per semantic function layer from a live timing snapshot, with an optional log scale for low heat values.
 - **Coverage / LCOV Coverage**: executed or covered function layers light up, either from live touch data or from an imported LLVM `lcov` tracefile, with per-function coverage status in the building tooltip.
 - Semantic filters (hide test entities, hide struct-backed entities), module filtering, and a debug panel with GBuffer/AO/shadow-map inspection views.
-
-### BioView mode
-
-Biology mode grows the whole codebase as one organism from the same `CodeSemanticSnapshot`: every module becomes a translucent tissue territory, every class or struct becomes a cell packed into its module's tissue, and strong cross-module dependency coupling becomes a blood vessel arcing between tissues, with thickness scaling by edge count. The most significant classes render as fully detailed organelle cells whose real members drive the anatomy — methods become mitochondria, fields become ribosomes, declared members become DNA base-pair rungs, the inheritance chain becomes a Golgi stack, oversized methods become lysosomes — and overall class health (method length, coupling, size) tints the membrane green to red. Every organelle carries a semantic reference back to its code node. The build is deterministic; placement is seeded from stable hashes of member names.
 
 ### Rendering
 
@@ -125,7 +120,7 @@ Plugin-private dependencies (EnTT, tree-sitter, the tree-sitter C++ grammar) are
 | `product/draxul-codeviz-scene` | Backend-neutral scene records, presentation ECS world, scene snapshot helpers |
 | `product/draxul-codeviz-renderer` | Shared `CodeVizScenePass` plus Vulkan and Metal backends |
 | `product/draxul-codeviz-host` | Shared camera and input helpers for code visualization hosts |
-| `product/draxul-megacity` | Host lifecycle, configuration, semantic layout, city and biology builders, ImGui panels |
+| `product/draxul-megacity` | Host lifecycle, configuration, semantic layout, city builder, ImGui panels |
 | `shaders/` | GLSL (Vulkan) and MSL (Metal) sources: scene, GBuffer, AO, shadows, post/tone-map, tooltip, debug |
 | `assets/textures/` | PBR material textures (roads, sidewalks, bark, leaf atlases) staged into the plugin package |
 | `tests/` | The focused plugin test suite (scene host/layout/world, geometry, Tree-sitter, config, coverage import) |
