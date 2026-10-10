@@ -26,7 +26,8 @@ MegacityHostPanelFrame::MegacityHostPanelFrame(
         | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
         | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus
         | ImGuiWindowFlags_NoBackground;
-    ImGui::SetNextWindowPos(ImVec2(static_cast<float>(viewport.pixel_pos.x), static_cast<float>(viewport.pixel_pos.y)));
+    // ImGui coordinates are pane-local (PluginImGuiContext::begin_frame).
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(pixel_w), static_cast<float>(pixel_h)));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);

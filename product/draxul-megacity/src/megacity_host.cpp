@@ -961,7 +961,7 @@ void MegaCityHost::on_mouse_move(const MouseMoveEvent& event)
 {
     PERF_MEASURE();
 
-    if (plugin_support::ImGuiInputBridge::route_mouse_move(imgui_.context(), event))
+    if (plugin_support::ImGuiInputBridge::route_mouse_move(imgui_, event))
     {
         if (callbacks_)
             callbacks_->request_frame();
@@ -1014,7 +1014,7 @@ void MegaCityHost::on_mouse_button(const MouseButtonEvent& event)
 {
     PERF_MEASURE();
 
-    if (plugin_support::ImGuiInputBridge::route_mouse_button(imgui_.context(), event))
+    if (plugin_support::ImGuiInputBridge::route_mouse_button(imgui_, event))
     {
         if (callbacks_)
             callbacks_->request_frame();
@@ -1075,9 +1075,11 @@ void MegaCityHost::render_host_imgui(float dt)
     };
     const auto scanner_snapshot = semantic_source_->scanner_snapshot();
     const CodebaseScanProgress scanner_progress = semantic_source_->progress();
+    // ImGui coordinates are pane-local, so the panel's first-use position is
+    // the pane's top-left corner.
     if (render_treesitter_panel(
-            viewport_.pixel_pos.x,
-            viewport_.pixel_pos.y,
+            0,
+            0,
             pixel_w_,
             pixel_h_,
             scanner_snapshot,
